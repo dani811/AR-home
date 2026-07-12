@@ -41,6 +41,23 @@ Consulta [`docs/architecture.md`](docs/architecture.md) para el diseño del sist
 | Procesamiento | Python 3.12, OpenCV, Open3D, PyTorch |
 | Integraciones | REST, WebSocket, MQTT, Home Assistant |
 
+## Desarrollo dirigido por especificaciones
+
+AR Home utiliza GitHub Spec Kit con versión fijada. La constitución del proyecto, los overrides y los roles de revisión viven en:
+
+- [`.specify/memory/constitution.md`](.specify/memory/constitution.md)
+- [`.specify/templates/overrides/`](.specify/templates/overrides/)
+- [`AGENTS.md`](AGENTS.md)
+- [`docs/spec-kit.md`](docs/spec-kit.md)
+
+Instalación reproducible:
+
+```bash
+bash scripts/setup-speckit.sh
+```
+
+Cada feature sigue el flujo: especificar, aclarar, planificar, generar tareas atómicas, analizar consistencia, implementar y converger.
+
 ## Estado
 
 El repositorio está en fase de bootstrap arquitectónico. La prioridad es cerrar el contrato de captura y construir una primera vertical funcional:
