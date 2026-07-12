@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ar-home.local/contracts/capture-session.schema.json",
+  "title": "CaptureSession",
+  "type": "object",
+  "required": ["schemaVersion", "sessionId", "siteId", "device", "startedAt", "frames"],
+  "properties": {
+    "schemaVersion": { "type": "string", "const": "1.0.0" },
+    "sessionId": { "type": "string", "format": "uuid" },
+    "siteId": { "type": "string", "format": "uuid" },
+    "floorId": { "type": ["string", "null"], "format": "uuid" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "completedAt": { "type": ["string", "null"], "format": "date-time" },
+    "device": {
+      "type": "object",
+      "required": ["platform", "model"],
+      "properties": {
+        "platform": { "enum": ["web", "android", "ios"] },
+        "model": { "type": "string" },
+        "hasDepth": { "type": "boolean" },
+        "trackingProvider": { "enum": ["webxr", "arcore", "arkit", "roomplan", "unknown"] }
+      },
+      "additionalProperties": false
+    },
+    "coordinateSystem": {
+      "type": "object",
+      "required": ["handedness", "upAxis", "unit"],
+      "properties": {
+        "handedness": { "enum": ["right"] },
+        "upAxis": { "enum": ["Y"] },
+        "unit": { "enum": ["meter"] }
+      },
+      "additionalProperties": false,
+      "default": { "handedness": "right", "upAxis": "Y", "unit": "meter" }
+    },
+    "frames": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["frameId", "timestampNs", "pose", "rgbObjectKey", "trackingState"],
+        "properties": {
+          "frameId": { "type": "string", "format": "uuid" },
+          "timestampNs": { "type": "integer", "minimum": 0 },
+          "rgbObjectKey": { "type": "string" },
+          "depthObjectKey": { "type": ["string", "null"] },
+          "trackingState": { "enum": ["tracking", "limited", "lost"] },
+          "isKeyframe": { "type": "boolean", "default": false },
+          "pose": {
+            "type": "object",
+            "required": ["position", "orientation"],
+            "properties": {
+              "position": {
+                "type": "array",
+                "prefixItems": [{"type":"number"},{"type":"number"},{"type":"number"}],
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "orientation": {
+                "description": "Quaternion [x,y,z,w]",
+                "type": "array",
+                "prefixItems": [{"type":"number"},{"type":"number"},{"type":"number"},{"type":"number"}],
+                "minItems": 4,
+                "maxItems": 4
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
