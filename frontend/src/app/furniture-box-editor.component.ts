@@ -1,12 +1,15 @@
 import {
   AfterViewInit,
   ChangeDetectionStrategy,
+  ChangeDetectorRef,
   Component,
   ElementRef,
   EventEmitter,
+  NgZone,
   OnDestroy,
   Output,
-  ViewChild
+  ViewChild,
+  inject
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import * as THREE from 'three';
@@ -16,6 +19,11 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { FurnitureEditorState } from './spatial.models';
 
 type TransformMode = 'translate' | 'rotate' | 'scale';
+
+type DisposableRenderable = THREE.Object3D & {
+  geometry?: THREE.BufferGeometry;
+  material?: THREE.Material | THREE.Material[];
+};
 
 @Component({
   selector: 'arh-furniture-box-editor',
@@ -40,6 +48,8 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
   height = 2.2;
   depth = 0.6;
 
+  private readonly changeDetector = inject(ChangeDetectorRef);
+  private readonly ngZone = inject(NgZone);
   private scene?: THREE.Scene;
   private camera?: THREE.PerspectiveCamera;
   private renderer?: THREE.WebGLRenderer;
@@ -49,7 +59,7 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
   private resizeObserver?: ResizeObserver;
 
   ngAfterViewInit(): void {
-    this.initializeScene();
+    this.ngZone.runOutsideAngular(() => this.initializeScene());
     this.emitState();
   }
 
@@ -59,17 +69,16 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
     this.orbitControls?.dispose();
     this.transformControls?.dispose();
 
-    if (this.furnitureMesh) {
-      this.furnitureMesh.geometry.dispose();
-      this.furnitureMesh.material.dispose();
-      this.furnitureMesh.children.forEach((child) => {
-        if (child instanceof THREE.LineSegments) {
-          child.geometry.dispose();
-          const materials = Array.isArray(child.material) ? child.material : [child.material];
-          materials.forEach((material) => material.dispose());
-        }
-      });
-    }
+    this.scene?.traverse((object) => {
+      const renderable = object as DisposableRenderable;
+      renderable.geometry?.dispose();
+      const materials = renderable.material
+        ? Array.isArray(renderable.material)
+          ? renderable.material
+          : [renderable.material]
+        : [];
+      materials.forEach((material) => material.dispose());
+    });
 
     this.renderer?.dispose();
     this.renderer?.domElement.remove();
@@ -142,13 +151,14 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
     keyLight.castShadow = true;
     this.scene.add(keyLight);
 
-    const floorGeometry = new THREE.PlaneGeometry(12, 12);
-    const floorMaterial = new THREE.MeshStandardMaterial({
-      color: 0x0d1a2a,
-      roughness: 0.92,
-      metalness: 0.05
-    });
-    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(12, 12),
+      new THREE.MeshStandardMaterial({
+        color: 0x0d1a2a,
+        roughness: 0.92,
+        metalness: 0.05
+      })
+    );
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
     this.scene.add(floor);
@@ -171,9 +181,13 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
     this.furnitureMesh.position.set(this.positionX, this.positionY, this.positionZ);
     this.furnitureMesh.scale.set(this.width, this.height, this.depth);
 
-    const edgesGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
-    const edgesMaterial = new THREE.LineBasicMaterial({ color: 0x7eeeff });
-    const edges = new THREE.LineSegments(edgesGeometry, edgesMaterial);
+    const edgeSourceGeometry = new THREE.BoxGeometry(1, 1, 1);
+    const edgesGeometry = new THREE.EdgesGeometry(edgeSourceGeometry);
+    edgeSourceGeometry.dispose();
+    const edges = new THREE.LineSegments(
+      edgesGeometry,
+      new THREE.LineBasicMaterial({ color: 0x7eeeff })
+    );
     this.furnitureMesh.add(edges);
     this.scene.add(this.furnitureMesh);
 
@@ -199,7 +213,9 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
         this.orbitControls.enabled = !(event as unknown as { value: boolean }).value;
       }
     });
-    this.transformControls.addEventListener('objectChange', () => this.syncFromMesh());
+    this.transformControls.addEventListener('objectChange', () => {
+      this.ngZone.run(() => this.syncFromMesh());
+    });
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(viewport);
@@ -240,6 +256,7 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
 
     const euler = new THREE.Euler().setFromQuaternion(this.furnitureMesh.quaternion, 'YXZ');
     this.yawDegrees = this.round(THREE.MathUtils.radToDeg(euler.y), 1);
+    this.changeDetector.markForCheck();
     this.emitState();
   }
 
