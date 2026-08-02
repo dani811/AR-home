@@ -1,0 +1,127 @@
+<main class="page-shell">
+  <header class="hero">
+    <div>
+      <p class="eyebrow">AR Home · Spatial core</p>
+      <h1>Delimita el mueble antes de intentar reconocerlo</h1>
+      <p class="hero-copy">
+        Define un volumen orientado, confirma su posición en el espacio y registra una identidad física estable.
+        La visión se añadirá después como ayuda de relocalización, no como única fuente de verdad.
+      </p>
+    </div>
+    <div class="status-badge">
+      <span></span>
+      Vertical slice 2
+    </div>
+  </header>
+
+  <section class="workflow-card">
+    <div class="step-heading">
+      <span>01</span>
+      <div>
+        <h2>Selecciona el espacio</h2>
+        <p>Crea uno nuevo o pega el UUID de uno existente.</p>
+      </div>
+    </div>
+
+    <form [formGroup]="spaceForm" class="space-form" (ngSubmit)="createSpace()">
+      <label>
+        Nombre del espacio
+        <input formControlName="spaceName" autocomplete="off" />
+      </label>
+      <button type="submit" [disabled]="creatingSpace()">
+        {{ creatingSpace() ? 'Creando…' : 'Crear espacio' }}
+      </button>
+      <label class="space-id-field">
+        Space ID
+        <input formControlName="spaceId" placeholder="UUID devuelto por la API" autocomplete="off" />
+      </label>
+    </form>
+  </section>
+
+  <section class="editor-section">
+    <div class="step-heading">
+      <span>02</span>
+      <div>
+        <h2>Ajusta la caja tridimensional</h2>
+        <p>Mueve, gira y escala el volumen. Los datos se convierten directamente al contrato del backend.</p>
+      </div>
+    </div>
+    <arh-furniture-box-editor (editorChange)="onEditorChange($event)" />
+  </section>
+
+  <section class="registration-grid">
+    <div class="workflow-card">
+      <div class="step-heading">
+        <span>03</span>
+        <div>
+          <h2>Registra la identidad</h2>
+          <p>El alta se guarda con reconocimiento manual asistido y confianza completa.</p>
+        </div>
+      </div>
+
+      <form [formGroup]="furnitureForm" class="registration-form" (ngSubmit)="saveFurniture()">
+        <label>
+          Nombre del mueble
+          <input formControlName="furnitureName" autocomplete="off" />
+        </label>
+        <label>
+          Categoría
+          <select formControlName="category">
+            @for (category of categories; track category.value) {
+              <option [value]="category.value">{{ category.label }}</option>
+            }
+          </select>
+        </label>
+        <button
+          type="submit"
+          class="primary-action"
+          [disabled]="spaceForm.controls.spaceId.invalid || furnitureForm.invalid || savingFurniture()"
+        >
+          {{ savingFurniture() ? 'Registrando…' : 'Registrar mueble' }}
+        </button>
+      </form>
+
+      @if (errorMessage(); as error) {
+        <div class="message error" role="alert">{{ error }}</div>
+      }
+
+      @if (createdFurniture(); as furniture) {
+        <div class="message success">
+          <strong>Mueble registrado</strong>
+          <span>{{ furniture.id }}</span>
+        </div>
+      }
+    </div>
+
+    <aside class="payload-card">
+      <p class="eyebrow">Payload en tiempo real</p>
+      <h2>Pose y dimensiones</h2>
+      <dl>
+        <div>
+          <dt>Posición</dt>
+          <dd>
+            X {{ format(editorState.spaceTransform.translation.x) }} ·
+            Y {{ format(editorState.spaceTransform.translation.y) }} ·
+            Z {{ format(editorState.spaceTransform.translation.z) }}
+          </dd>
+        </div>
+        <div>
+          <dt>Dimensiones</dt>
+          <dd>
+            {{ format(editorState.bounds.width) }} ×
+            {{ format(editorState.bounds.height) }} ×
+            {{ format(editorState.bounds.depth) }} m
+          </dd>
+        </div>
+        <div>
+          <dt>Rotación Y</dt>
+          <dd>{{ format(editorState.yawDegrees) }}°</dd>
+        </div>
+        <div>
+          <dt>Método</dt>
+          <dd>MANUAL_BOUNDING_BOX</dd>
+        </div>
+      </dl>
+    </aside>
+  </section>
+</main>
