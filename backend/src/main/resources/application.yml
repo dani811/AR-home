@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: ar-home-backend
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/ar_home}
+    username: ${DB_USER:ar_home}
+    password: ${DB_PASSWORD:ar_home}
+  flyway:
+    enabled: true
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
