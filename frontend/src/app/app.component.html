@@ -2,15 +2,15 @@
   <header class="hero">
     <div>
       <p class="eyebrow">AR Home · Spatial core</p>
-      <h1>Delimita el mueble antes de intentar reconocerlo</h1>
+      <h1>Encaja el volumen sobre el mueble real</h1>
       <p class="hero-copy">
-        Define un volumen orientado, confirma su posición en el espacio y registra una identidad física estable.
-        La visión se añadirá después como ayuda de relocalización, no como única fuente de verdad.
+        Abre la cámara trasera, superpone la caja tridimensional y ajusta su geometría directamente sobre la imagen.
+        La vista previa no se persiste como pose espacial hasta disponer de un anclaje WebXR válido.
       </p>
     </div>
     <div class="status-badge">
       <span></span>
-      Vertical slice 2
+      Vertical slice 3
     </div>
   </header>
 
@@ -43,7 +43,7 @@
       <span>02</span>
       <div>
         <h2>Ajusta la caja tridimensional</h2>
-        <p>Mueve, gira y escala el volumen. Los datos se convierten directamente al contrato del backend.</p>
+        <p>Alterna entre escena 3D y cámara. La geometría se mantiene en el contrato del backend.</p>
       </div>
     </div>
     <arh-furniture-box-editor (editorChange)="onEditorChange($event)" />
@@ -55,7 +55,7 @@
         <span>03</span>
         <div>
           <h2>Registra la identidad</h2>
-          <p>El alta se guarda con reconocimiento manual asistido y confianza completa.</p>
+          <p>Solo se permite persistir una pose expresada en el sistema de referencia del espacio.</p>
         </div>
       </div>
 
@@ -75,11 +75,32 @@
         <button
           type="submit"
           class="primary-action"
-          [disabled]="spaceForm.controls.spaceId.invalid || furnitureForm.invalid || savingFurniture()"
+          [disabled]="
+            spaceForm.controls.spaceId.invalid ||
+            furnitureForm.invalid ||
+            editorState.referenceFrame !== 'SPACE' ||
+            savingFurniture()
+          "
         >
-          {{ savingFurniture() ? 'Registrando…' : 'Registrar mueble' }}
+          {{
+            editorState.referenceFrame === 'CAMERA_PREVIEW'
+              ? 'Pendiente de anclaje'
+              : savingFurniture()
+                ? 'Registrando…'
+                : 'Registrar mueble'
+          }}
         </button>
       </form>
+
+      @if (editorState.referenceFrame === 'CAMERA_PREVIEW') {
+        <div class="message warning" role="status">
+          <strong>Pose no persistente</strong>
+          <span>
+            Puedes ajustar dimensiones sobre la cámara, pero el origen actual es el visor. El siguiente incremento
+            sustituirá esta referencia por un anclaje WebXR.
+          </span>
+        </div>
+      }
 
       @if (errorMessage(); as error) {
         <div class="message error" role="alert">{{ error }}</div>
@@ -97,6 +118,12 @@
       <p class="eyebrow">Payload en tiempo real</p>
       <h2>Pose y dimensiones</h2>
       <dl>
+        <div>
+          <dt>Sistema de referencia</dt>
+          <dd>
+            {{ editorState.referenceFrame === 'SPACE' ? 'Espacio persistente' : 'Vista previa de cámara' }}
+          </dd>
+        </div>
         <div>
           <dt>Posición</dt>
           <dd>

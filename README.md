@@ -36,6 +36,21 @@ Implementado en `frontend/`:
 - Liberación explícita de controles y recursos WebGL.
 - Build de producción validado mediante GitHub Actions.
 
+### Vista previa sobre cámara
+
+- Captura mediante `navigator.mediaDevices.getUserMedia`.
+- Preferencia automática por la cámara trasera.
+- Selector de cámaras disponible después de conceder permisos.
+- Vídeo a pantalla completa con canvas Three.js transparente superpuesto.
+- Retícula, estado de captura y resolución activa.
+- Espejado automático para cámaras frontales.
+- Gestión explícita de errores de permiso, cámara ocupada y dispositivo no disponible.
+- Parada de todas las pistas al cerrar o cambiar al modo escena.
+- Diferenciación entre referencias `SPACE` y `CAMERA_PREVIEW`.
+- Bloqueo de persistencia para evitar guardar una pose relativa al visor como pose de habitación.
+
+La vista de cámara permite ajustar la geometría real del mueble, pero todavía no crea un anclaje espacial persistente. Ese paso corresponde al siguiente incremento WebXR.
+
 ## Jerarquía espacial
 
 ```text
@@ -75,6 +90,8 @@ npm start
 
 El proxy de desarrollo reenvía `/api` a `http://localhost:8080`. Abre `http://localhost:4200`.
 
+La cámara web requiere un contexto seguro: `localhost` durante desarrollo o HTTPS al acceder desde otro dispositivo. Abrir una IP local mediante HTTP normalmente no concede acceso a cámara.
+
 ## API espacial inicial
 
 ```text
@@ -106,8 +123,8 @@ GET  /api/v1/spatial/items/{itemId}/world-pose
 
 ## Próximos incrementos
 
-1. Captura móvil con `getUserMedia` y superposición del editor sobre la cámara.
-2. WebXR/ARCore para obtener pose y hit-test en dispositivos compatibles.
+1. WebXR `immersive-ar` con hit-test para situar la caja sobre una superficie real.
+2. Conversión de la pose WebXR a un sistema de referencia persistente del espacio.
 3. Persistencia de observaciones visuales y relocalización entre sesiones.
 4. Editor visual de cajones, baldas y otros compartimentos.
 5. Adaptador con Homestead Inventory y Home Assistant.

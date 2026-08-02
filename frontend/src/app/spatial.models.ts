@@ -65,10 +65,13 @@ export interface RegisterFurnitureRequest {
   visualDescriptor: string | null;
 }
 
+export type EditorReferenceFrame = 'SPACE' | 'CAMERA_PREVIEW';
+
 export interface FurnitureEditorState {
   spaceTransform: Transform3DDto;
   bounds: Bounds3DDto;
   yawDegrees: number;
+  referenceFrame: EditorReferenceFrame;
 }
 
 export const IDENTITY_TRANSFORM: Transform3DDto = {
