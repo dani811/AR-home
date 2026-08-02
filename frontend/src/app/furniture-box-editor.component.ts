@@ -16,9 +16,16 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
+import {
+  CameraAccessError,
+  CameraDevice,
+  CameraSession,
+  CameraStreamService
+} from './camera-stream.service';
 import { FurnitureEditorState } from './spatial.models';
 
 type TransformMode = 'translate' | 'rotate' | 'scale';
+type ViewMode = 'scene' | 'camera';
 
 type DisposableRenderable = THREE.Object3D & {
   geometry?: THREE.BufferGeometry;
@@ -37,9 +44,13 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
   @ViewChild('viewport', { static: true })
   private readonly viewportRef!: ElementRef<HTMLDivElement>;
 
+  @ViewChild('cameraVideo', { static: true })
+  private readonly cameraVideoRef!: ElementRef<HTMLVideoElement>;
+
   @Output() readonly editorChange = new EventEmitter<FurnitureEditorState>();
 
   mode: TransformMode = 'translate';
+  viewMode: ViewMode = 'scene';
   positionX = 0;
   positionY = 1.1;
   positionZ = 0;
@@ -48,22 +59,50 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
   height = 2.2;
   depth = 0.6;
 
+  readonly cameraSupported: boolean;
+  readonly secureContext: boolean;
+  cameraDevices: readonly CameraDevice[] = [];
+  selectedCameraId = '';
+  cameraError: string | null = null;
+  cameraDetails: string | null = null;
+  cameraActive = false;
+  cameraStarting = false;
+  mirrorVideo = false;
+
+  private readonly cameraStream = inject(CameraStreamService);
   private readonly changeDetector = inject(ChangeDetectorRef);
   private readonly ngZone = inject(NgZone);
+  private readonly handleDeviceChange = (): void => {
+    if (this.cameraActive) {
+      void this.refreshCameraDevices();
+    }
+  };
+
   private scene?: THREE.Scene;
   private camera?: THREE.PerspectiveCamera;
   private renderer?: THREE.WebGLRenderer;
   private orbitControls?: OrbitControls;
   private transformControls?: TransformControls;
   private furnitureMesh?: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
+  private environmentGroup?: THREE.Group;
   private resizeObserver?: ResizeObserver;
+  private cameraPoseInitialized = false;
+
+  constructor() {
+    this.cameraSupported = this.cameraStream.isSupported();
+    this.secureContext = this.cameraStream.isSecureContext();
+  }
 
   ngAfterViewInit(): void {
     this.ngZone.runOutsideAngular(() => this.initializeScene());
+    navigator.mediaDevices?.addEventListener?.('devicechange', this.handleDeviceChange);
     this.emitState();
   }
 
   ngOnDestroy(): void {
+    navigator.mediaDevices?.removeEventListener?.('devicechange', this.handleDeviceChange);
+    this.cameraStream.stop();
+    this.detachVideoStream();
     this.resizeObserver?.disconnect();
     this.renderer?.setAnimationLoop(null);
     this.orbitControls?.dispose();
@@ -87,6 +126,67 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
   setMode(mode: TransformMode): void {
     this.mode = mode;
     this.transformControls?.setMode(mode);
+  }
+
+  async startCamera(deviceId?: string): Promise<void> {
+    if (this.cameraStarting || !this.cameraSupported) {
+      return;
+    }
+
+    if (!this.secureContext) {
+      this.cameraError =
+        'La cámara requiere HTTPS o localhost. Abre la aplicación desde un origen seguro.';
+      this.changeDetector.markForCheck();
+      return;
+    }
+
+    this.cameraStarting = true;
+    this.cameraError = null;
+    this.cameraDetails = null;
+    this.changeDetector.markForCheck();
+
+    try {
+      const session = await this.cameraStream.start(deviceId || this.selectedCameraId || undefined);
+      await this.attachVideoStream(session);
+      this.cameraActive = true;
+      this.selectedCameraId = session.deviceId ?? this.selectedCameraId;
+      this.mirrorVideo = session.facingMode === 'user';
+      this.cameraDetails = this.describeSession(session);
+      await this.refreshCameraDevices();
+      this.enterCameraView();
+    } catch (error: unknown) {
+      this.cameraStream.stop();
+      this.detachVideoStream();
+      this.cameraActive = false;
+      this.cameraError =
+        error instanceof CameraAccessError
+          ? error.message
+          : error instanceof Error
+            ? error.message
+            : 'No se pudo iniciar la cámara.';
+      this.enterSceneView();
+    } finally {
+      this.cameraStarting = false;
+      this.changeDetector.markForCheck();
+    }
+  }
+
+  async switchCamera(deviceId: string): Promise<void> {
+    this.selectedCameraId = deviceId;
+    if (this.cameraActive) {
+      await this.startCamera(deviceId);
+    }
+  }
+
+  stopCamera(): void {
+    this.cameraStream.stop();
+    this.detachVideoStream();
+    this.cameraActive = false;
+    this.cameraStarting = false;
+    this.cameraDetails = null;
+    this.mirrorVideo = false;
+    this.enterSceneView();
+    this.changeDetector.markForCheck();
   }
 
   applyNumericState(): void {
@@ -115,12 +215,12 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
     this.height = 2.2;
     this.depth = 0.6;
     this.positionX = 0;
-    this.positionY = this.height / 2;
-    this.positionZ = 0;
+    this.positionY = this.viewMode === 'camera' ? 0 : this.height / 2;
+    this.positionZ = this.viewMode === 'camera' ? -3 : 0;
     this.yawDegrees = 0;
     this.applyNumericState();
 
-    if (this.camera && this.orbitControls) {
+    if (this.camera && this.orbitControls && this.viewMode === 'scene') {
       this.camera.position.set(4, 3, 5);
       this.orbitControls.target.set(0, 1, 0);
       this.orbitControls.update();
@@ -137,7 +237,8 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.05, 100);
     this.camera.position.set(4, 3, 5);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this.renderer.setClearColor(0x07111e, 1);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -151,6 +252,7 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
     keyLight.castShadow = true;
     this.scene.add(keyLight);
 
+    this.environmentGroup = new THREE.Group();
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(12, 12),
       new THREE.MeshStandardMaterial({
@@ -161,11 +263,12 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
     );
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
-    this.scene.add(floor);
+    this.environmentGroup.add(floor);
 
     const grid = new THREE.GridHelper(12, 24, 0x34d6ff, 0x244158);
     grid.position.y = 0.002;
-    this.scene.add(grid);
+    this.environmentGroup.add(grid);
+    this.scene.add(this.environmentGroup);
 
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     const material = new THREE.MeshStandardMaterial({
@@ -173,7 +276,8 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
       transparent: true,
       opacity: 0.28,
       roughness: 0.35,
-      metalness: 0.1
+      metalness: 0.1,
+      depthTest: true
     });
 
     this.furnitureMesh = new THREE.Mesh(geometry, material);
@@ -210,7 +314,8 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
 
     this.transformControls.addEventListener('dragging-changed', (event) => {
       if (this.orbitControls) {
-        this.orbitControls.enabled = !(event as unknown as { value: boolean }).value;
+        this.orbitControls.enabled =
+          this.viewMode === 'scene' && !(event as unknown as { value: boolean }).value;
       }
     });
     this.transformControls.addEventListener('objectChange', () => {
@@ -222,11 +327,103 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
     this.resize();
 
     this.renderer.setAnimationLoop(() => {
-      this.orbitControls?.update();
+      if (this.viewMode === 'scene') {
+        this.orbitControls?.update();
+      }
       if (this.scene && this.camera) {
         this.renderer?.render(this.scene, this.camera);
       }
     });
+  }
+
+  private enterCameraView(): void {
+    if (!this.scene || !this.camera || !this.renderer || !this.furnitureMesh) {
+      return;
+    }
+
+    this.viewMode = 'camera';
+    this.scene.background = null;
+    this.scene.fog = null;
+    this.environmentGroup?.visible && (this.environmentGroup.visible = false);
+    this.renderer.setClearColor(0x000000, 0);
+    this.camera.fov = 60;
+    this.camera.position.set(0, 0, 0);
+    this.camera.quaternion.identity();
+    this.camera.updateProjectionMatrix();
+    this.camera.updateMatrixWorld(true);
+
+    if (this.orbitControls) {
+      this.orbitControls.enabled = false;
+      this.orbitControls.target.set(0, 0, -3);
+    }
+
+    if (!this.cameraPoseInitialized) {
+      this.furnitureMesh.position.set(0, 0, -3);
+      this.furnitureMesh.quaternion.identity();
+      this.cameraPoseInitialized = true;
+      this.syncFromMesh();
+    } else {
+      this.emitState();
+    }
+  }
+
+  private enterSceneView(): void {
+    if (!this.scene || !this.camera || !this.renderer) {
+      return;
+    }
+
+    this.viewMode = 'scene';
+    this.scene.background = new THREE.Color(0x07111e);
+    this.scene.fog = new THREE.Fog(0x07111e, 10, 24);
+    if (this.environmentGroup) {
+      this.environmentGroup.visible = true;
+    }
+    this.renderer.setClearColor(0x07111e, 1);
+    this.camera.fov = 50;
+    this.camera.position.set(4, 3, 5);
+    this.camera.updateProjectionMatrix();
+
+    if (this.orbitControls) {
+      this.orbitControls.enabled = true;
+      if (this.furnitureMesh) {
+        this.orbitControls.target.copy(this.furnitureMesh.position);
+      }
+      this.orbitControls.update();
+    }
+    this.emitState();
+  }
+
+  private async attachVideoStream(session: CameraSession): Promise<void> {
+    const video = this.cameraVideoRef.nativeElement;
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = session.stream;
+    await video.play();
+  }
+
+  private detachVideoStream(): void {
+    const video = this.cameraVideoRef.nativeElement;
+    video.pause();
+    video.srcObject = null;
+  }
+
+  private async refreshCameraDevices(): Promise<void> {
+    try {
+      this.cameraDevices = await this.cameraStream.listVideoInputs();
+      if (!this.selectedCameraId && this.cameraDevices.length > 0) {
+        this.selectedCameraId = this.cameraDevices[0].deviceId;
+      }
+    } catch {
+      this.cameraDevices = [];
+    }
+    this.changeDetector.markForCheck();
+  }
+
+  private describeSession(session: CameraSession): string {
+    const resolution =
+      session.width && session.height ? `${session.width} × ${session.height}` : 'resolución automática';
+    const facing = session.facingMode === 'environment' ? 'trasera' : session.facingMode === 'user' ? 'frontal' : null;
+    return facing ? `${resolution} · cámara ${facing}` : resolution;
   }
 
   private resize(): void {
@@ -285,7 +482,8 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
         height: this.clampDimension(Math.abs(this.furnitureMesh.scale.y)),
         depth: this.clampDimension(Math.abs(this.furnitureMesh.scale.z))
       },
-      yawDegrees: this.yawDegrees
+      yawDegrees: this.yawDegrees,
+      referenceFrame: this.viewMode === 'camera' ? 'CAMERA_PREVIEW' : 'SPACE'
     });
   }
 
