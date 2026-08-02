@@ -29,7 +29,8 @@ export class AppComponent {
     { value: 'OTHER', label: 'Otro' }
   ];
 
-  readonly form;
+  readonly spaceForm;
+  readonly furnitureForm;
   readonly creatingSpace = signal(false);
   readonly savingFurniture = signal(false);
   readonly createdFurniture = signal<FurnitureInstanceDto | null>(null);
@@ -48,9 +49,11 @@ export class AppComponent {
     formBuilder: FormBuilder,
     private readonly spatialApi: SpatialApiService
   ) {
-    this.form = formBuilder.nonNullable.group({
+    this.spaceForm = formBuilder.nonNullable.group({
       spaceName: ['Vivienda principal', [Validators.required, Validators.maxLength(120)]],
-      spaceId: ['', [Validators.required]],
+      spaceId: ['', [Validators.required]]
+    });
+    this.furnitureForm = formBuilder.nonNullable.group({
       furnitureName: ['Armario dormitorio', [Validators.required, Validators.maxLength(120)]],
       category: ['WARDROBE', [Validators.required]]
     });
@@ -61,7 +64,7 @@ export class AppComponent {
   }
 
   createSpace(): void {
-    const spaceName = this.form.controls.spaceName.value.trim();
+    const spaceName = this.spaceForm.controls.spaceName.value.trim();
     if (!spaceName || this.creatingSpace()) {
       return;
     }
@@ -73,21 +76,26 @@ export class AppComponent {
       .pipe(finalize(() => this.creatingSpace.set(false)))
       .subscribe({
         next: (space) => {
-          this.form.controls.spaceId.setValue(space.id);
-          this.form.controls.spaceId.markAsDirty();
+          this.spaceForm.controls.spaceId.setValue(space.id);
+          this.spaceForm.controls.spaceId.markAsDirty();
         },
         error: (error: unknown) => this.errorMessage.set(this.readError(error))
       });
   }
 
   saveFurniture(): void {
-    this.form.markAllAsTouched();
-    if (this.form.invalid || this.savingFurniture()) {
+    this.spaceForm.controls.spaceId.markAsTouched();
+    this.furnitureForm.markAllAsTouched();
+    if (
+      this.spaceForm.controls.spaceId.invalid ||
+      this.furnitureForm.invalid ||
+      this.savingFurniture()
+    ) {
       return;
     }
 
-    const spaceId = this.form.controls.spaceId.value.trim();
-    const furnitureName = this.form.controls.furnitureName.value.trim();
+    const spaceId = this.spaceForm.controls.spaceId.value.trim();
+    const furnitureName = this.furnitureForm.controls.furnitureName.value.trim();
     this.errorMessage.set(null);
     this.createdFurniture.set(null);
     this.savingFurniture.set(true);
@@ -95,7 +103,7 @@ export class AppComponent {
     this.spatialApi
       .registerFurniture(spaceId, {
         name: furnitureName,
-        category: this.form.controls.category.value,
+        category: this.furnitureForm.controls.category.value,
         spaceTransform: this.editorState.spaceTransform,
         bounds: this.editorState.bounds,
         recognitionMode: 'MANUAL_BOUNDING_BOX',
