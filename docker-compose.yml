@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ar_home
+      POSTGRES_USER: ar_home
+      POSTGRES_PASSWORD: ar_home
+    ports:
+      - "5432:5432"
+    volumes:
+      - ar_home_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ar_home -d ar_home"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: maven:3.9.11-eclipse-temurin-21
+    working_dir: /workspace/backend
+    command: mvn spring-boot:run
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/ar_home
+      DB_USER: ar_home
+      DB_PASSWORD: ar_home
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/workspace
+      - maven_cache:/root/.m2
+
+volumes:
+  ar_home_postgres:
+  maven_cache:
