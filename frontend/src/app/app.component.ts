@@ -42,7 +42,8 @@ export class AppComponent {
       rotation: { x: 0, y: 0, z: 0, w: 1 }
     },
     bounds: { width: 2, height: 2.2, depth: 0.6 },
-    yawDegrees: 0
+    yawDegrees: 0,
+    referenceFrame: 'SPACE'
   };
 
   constructor(
@@ -86,6 +87,14 @@ export class AppComponent {
   saveFurniture(): void {
     this.spaceForm.controls.spaceId.markAsTouched();
     this.furnitureForm.markAllAsTouched();
+
+    if (this.editorState.referenceFrame !== 'SPACE') {
+      this.errorMessage.set(
+        'La pose actual pertenece a una vista previa de cámara. Cambia a Escena 3D o espera al anclaje WebXR antes de registrar el mueble.'
+      );
+      return;
+    }
+
     if (
       this.spaceForm.controls.spaceId.invalid ||
       this.furnitureForm.invalid ||
