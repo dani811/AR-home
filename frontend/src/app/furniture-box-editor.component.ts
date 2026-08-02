@@ -32,6 +32,11 @@ type DisposableRenderable = THREE.Object3D & {
   material?: THREE.Material | THREE.Material[];
 };
 
+interface PoseSnapshot {
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+}
+
 @Component({
   selector: 'arh-furniture-box-editor',
   standalone: true,
@@ -86,7 +91,8 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
   private furnitureMesh?: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
   private environmentGroup?: THREE.Group;
   private resizeObserver?: ResizeObserver;
-  private cameraPoseInitialized = false;
+  private spacePoseSnapshot?: PoseSnapshot;
+  private cameraPreviewPose?: PoseSnapshot;
 
   constructor() {
     this.cameraSupported = this.cameraStream.isSupported();
@@ -341,10 +347,17 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
       return;
     }
 
+    const enteringFromScene = this.viewMode !== 'camera';
+    if (enteringFromScene) {
+      this.spacePoseSnapshot = this.snapshotFurniturePose();
+    }
+
     this.viewMode = 'camera';
     this.scene.background = null;
     this.scene.fog = null;
-    this.environmentGroup?.visible && (this.environmentGroup.visible = false);
+    if (this.environmentGroup) {
+      this.environmentGroup.visible = false;
+    }
     this.renderer.setClearColor(0x000000, 0);
     this.camera.fov = 60;
     this.camera.position.set(0, 0, 0);
@@ -357,10 +370,13 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
       this.orbitControls.target.set(0, 0, -3);
     }
 
-    if (!this.cameraPoseInitialized) {
-      this.furnitureMesh.position.set(0, 0, -3);
-      this.furnitureMesh.quaternion.identity();
-      this.cameraPoseInitialized = true;
+    if (enteringFromScene) {
+      if (this.cameraPreviewPose) {
+        this.restoreFurniturePose(this.cameraPreviewPose);
+      } else {
+        this.furnitureMesh.position.set(0, 0, -3);
+        this.furnitureMesh.quaternion.identity();
+      }
       this.syncFromMesh();
     } else {
       this.emitState();
@@ -370,6 +386,14 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
   private enterSceneView(): void {
     if (!this.scene || !this.camera || !this.renderer) {
       return;
+    }
+
+    const leavingCamera = this.viewMode === 'camera';
+    if (leavingCamera && this.furnitureMesh) {
+      this.cameraPreviewPose = this.snapshotFurniturePose();
+      if (this.spacePoseSnapshot) {
+        this.restoreFurniturePose(this.spacePoseSnapshot);
+      }
     }
 
     this.viewMode = 'scene';
@@ -390,7 +414,34 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
       }
       this.orbitControls.update();
     }
-    this.emitState();
+
+    if (leavingCamera) {
+      this.syncFromMesh();
+    } else {
+      this.emitState();
+    }
+  }
+
+  private snapshotFurniturePose(): PoseSnapshot {
+    if (!this.furnitureMesh) {
+      return {
+        position: new THREE.Vector3(),
+        quaternion: new THREE.Quaternion()
+      };
+    }
+
+    return {
+      position: this.furnitureMesh.position.clone(),
+      quaternion: this.furnitureMesh.quaternion.clone()
+    };
+  }
+
+  private restoreFurniturePose(snapshot: PoseSnapshot): void {
+    if (!this.furnitureMesh) {
+      return;
+    }
+    this.furnitureMesh.position.copy(snapshot.position);
+    this.furnitureMesh.quaternion.copy(snapshot.quaternion);
   }
 
   private async attachVideoStream(session: CameraSession): Promise<void> {
@@ -421,8 +472,15 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
 
   private describeSession(session: CameraSession): string {
     const resolution =
-      session.width && session.height ? `${session.width} × ${session.height}` : 'resolución automática';
-    const facing = session.facingMode === 'environment' ? 'trasera' : session.facingMode === 'user' ? 'frontal' : null;
+      session.width && session.height
+        ? `${session.width} × ${session.height}`
+        : 'resolución automática';
+    const facing =
+      session.facingMode === 'environment'
+        ? 'trasera'
+        : session.facingMode === 'user'
+          ? 'frontal'
+          : null;
     return facing ? `${resolution} · cámara ${facing}` : resolution;
   }
 
@@ -488,7 +546,9 @@ export class FurnitureBoxEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   private clampDimension(value: number): number {
-    return this.round(Math.min(Math.max(Number.isFinite(value) ? Math.abs(value) : 0.1, 0.1), 20));
+    return this.round(
+      Math.min(Math.max(Number.isFinite(value) ? Math.abs(value) : 0.1, 0.1), 20)
+    );
   }
 
   private finiteOrZero(value: number): number {
