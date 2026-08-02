@@ -23,7 +23,7 @@
       </div>
     </div>
 
-    <form [formGroup]="form" class="space-form" (ngSubmit)="createSpace()">
+    <form [formGroup]="spaceForm" class="space-form" (ngSubmit)="createSpace()">
       <label>
         Nombre del espacio
         <input formControlName="spaceName" autocomplete="off" />
@@ -59,7 +59,7 @@
         </div>
       </div>
 
-      <form [formGroup]="form" class="registration-form" (ngSubmit)="saveFurniture()">
+      <form [formGroup]="furnitureForm" class="registration-form" (ngSubmit)="saveFurniture()">
         <label>
           Nombre del mueble
           <input formControlName="furnitureName" autocomplete="off" />
@@ -72,7 +72,11 @@
             }
           </select>
         </label>
-        <button type="submit" class="primary-action" [disabled]="form.invalid || savingFurniture()">
+        <button
+          type="submit"
+          class="primary-action"
+          [disabled]="spaceForm.controls.spaceId.invalid || furnitureForm.invalid || savingFurniture()"
+        >
           {{ savingFurniture() ? 'Registrando…' : 'Registrar mueble' }}
         </button>
       </form>
