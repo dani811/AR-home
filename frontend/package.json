@@ -23,6 +23,7 @@
     "@angular/cli": "^20.2.0",
     "@angular/compiler-cli": "^20.2.0",
     "@types/three": "^0.180.0",
+    "@webgpu/types": "^0.1.64",
     "typescript": "~5.9.2"
   }
 }
