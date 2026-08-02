@@ -1,5 +1,54 @@
 <section class="editor-shell" aria-label="Editor tridimensional del mueble">
-  <div class="viewport" #viewport>
+  <div class="viewport" #viewport [class.camera-mode]="viewMode === 'camera'">
+    <video
+      #cameraVideo
+      class="camera-feed"
+      [class.visible]="cameraActive"
+      [class.mirrored]="mirrorVideo"
+      autoplay
+      muted
+      playsinline
+      aria-label="Vista previa de la cámara"
+    ></video>
+
+    @if (viewMode === 'camera') {
+      <div class="camera-vignette" aria-hidden="true"></div>
+      <div class="camera-reticle" aria-hidden="true">
+        <span></span>
+      </div>
+    }
+
+    <div class="view-toolbar" role="toolbar" aria-label="Fuente de visualización">
+      <button
+        type="button"
+        [class.active]="viewMode === 'scene'"
+        (click)="stopCamera()"
+      >
+        Escena 3D
+      </button>
+      <button
+        type="button"
+        [class.active]="viewMode === 'camera'"
+        [disabled]="cameraStarting || !cameraSupported"
+        (click)="startCamera()"
+      >
+        {{ cameraStarting ? 'Abriendo…' : 'Cámara' }}
+      </button>
+
+      @if (cameraActive && cameraDevices.length > 1) {
+        <select
+          class="camera-select"
+          aria-label="Seleccionar cámara"
+          [(ngModel)]="selectedCameraId"
+          (ngModelChange)="switchCamera($event)"
+        >
+          @for (device of cameraDevices; track device.deviceId) {
+            <option [value]="device.deviceId">{{ device.label }}</option>
+          }
+        </select>
+      }
+    </div>
+
     <div class="mode-toolbar" role="toolbar" aria-label="Modo de transformación">
       <button type="button" [class.active]="mode === 'translate'" (click)="setMode('translate')">
         Mover
@@ -13,8 +62,26 @@
       <button type="button" class="secondary" (click)="reset()">Reiniciar</button>
     </div>
 
+    @if (!cameraSupported) {
+      <div class="camera-message error" role="status">
+        Este navegador no permite acceder a la cámara.
+      </div>
+    } @else if (!secureContext) {
+      <div class="camera-message warning" role="status">
+        La cámara solo funciona desde HTTPS o localhost.
+      </div>
+    } @else if (cameraError) {
+      <div class="camera-message error" role="alert">{{ cameraError }}</div>
+    } @else if (cameraActive && cameraDetails) {
+      <div class="camera-message success" role="status">{{ cameraDetails }}</div>
+    }
+
     <div class="viewport-hint">
-      Arrastra el gizmo · rueda/pinza para zoom · arrastra el fondo para orbitar
+      @if (viewMode === 'camera') {
+        La caja está en coordenadas relativas a la cámara · arrastra el gizmo para encajarla
+      } @else {
+        Arrastra el gizmo · rueda/pinza para zoom · arrastra el fondo para orbitar
+      }
     </div>
   </div>
 
@@ -24,6 +91,16 @@
       <h2>Ajuste preciso</h2>
       <p>Las medidas están expresadas en metros y la posición corresponde al centro del volumen.</p>
     </header>
+
+    @if (viewMode === 'camera') {
+      <div class="reference-warning">
+        <strong>Vista previa de cámara</strong>
+        <span>
+          La geometría puede ajustarse visualmente, pero esta pose todavía no está anclada al espacio.
+          WebXR aportará el sistema de referencia persistente.
+        </span>
+      </div>
+    }
 
     <div class="field-grid">
       <label>
