@@ -6,10 +6,10 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.SystemClock
 import com.google.ar.core.Config
-import com.google.ar.core.NotYetAvailableException
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.CameraNotAvailableException
+import com.google.ar.core.exceptions.NotYetAvailableException
 import org.json.JSONArray
 import org.json.JSONObject
 import javax.microedition.khronos.egl.EGLConfig
