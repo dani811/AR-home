@@ -48,6 +48,7 @@ class MapCaptureSession(context: Context) {
         writeManifest(null)
     }
 
+    @Synchronized
     fun onFrame(frame: Frame) {
         if (closed || frame.camera.trackingState != TrackingState.TRACKING) return
         val pose = frame.camera.pose
@@ -57,8 +58,7 @@ class MapCaptureSession(context: Context) {
             frame.acquireCameraImage().use { image ->
                 val id = "%05d".format(keyframeCount)
                 val imageName = "$id.jpg"
-                val imageFile = File(images, imageName)
-                imageFile.writeBytes(image.toJpeg(90))
+                File(images, imageName).writeBytes(image.toJpeg(90))
 
                 val intrinsics = frame.camera.imageIntrinsics
                 keyframes.put(
@@ -86,6 +86,7 @@ class MapCaptureSession(context: Context) {
         }
     }
 
+    @Synchronized
     fun finish(): Result {
         check(!closed) { "Map capture session is already finished" }
         closed = true
@@ -166,7 +167,7 @@ class MapCaptureSession(context: Context) {
         targetOffset: Int,
         targetPixelStride: Int,
     ) {
-        val buffer = plane.buffer.duplicate()
+        val buffer = plane.buffer.duplicate().apply { rewind() }
         var out = targetOffset
         for (row in 0 until planeHeight) {
             val rowStart = row * plane.rowStride
