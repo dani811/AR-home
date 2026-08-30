@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.TargetApi
 import android.app.Activity
 import android.content.ContentValues
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -19,12 +20,14 @@ import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.Session
 import io.arhome.capabilities.ActiveArCoreProbeView
+import io.arhome.localizer.map.PersistentMapStore
 import java.io.File
 
 class MapCaptureActivity : Activity() {
 
     private lateinit var root: LinearLayout
     private lateinit var status: TextView
+    private lateinit var mapStore: PersistentMapStore
     private val handler = Handler(Looper.getMainLooper())
     private var session: Session? = null
     private var arView: ActiveArCoreProbeView? = null
@@ -40,6 +43,10 @@ class MapCaptureActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        mapStore = PersistentMapStore(File(filesDir, "persistent-map"))
+        mapStore.currentOrNull()?.let {
+            finalStatus = "Persistent map ready: ${it.sessionId} · ${it.keyframes.size} keyframes."
+        }
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 32, 32, 32)
@@ -54,6 +61,7 @@ class MapCaptureActivity : Activity() {
         })
         root.addView(button("Start mapping") { ensureCameraAndStart() })
         root.addView(button("Stop and export map") { stopAndExport() })
+        root.addView(button("Import persistent map ZIP") { selectMapArchive() })
         status = TextView(this).apply { textSize = 14f }
         root.addView(status)
         setContentView(root)
@@ -96,6 +104,25 @@ class MapCaptureActivity : Activity() {
             finalStatus = "Camera permission is required for visual mapping."
             renderStatus()
         }
+    }
+
+    @Deprecated("Uses platform document picker for map import")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != MAP_IMPORT_REQUEST || resultCode != RESULT_OK) return
+        val uri = data?.data ?: run {
+            finalStatus = "Map import failed: no file was returned."
+            renderStatus()
+            return
+        }
+        try {
+            val input = contentResolver.openInputStream(uri) ?: error("Android could not open the selected ZIP")
+            val map = input.use(mapStore::import)
+            finalStatus = "Persistent map imported: ${map.sessionId} · ${map.keyframes.size} keyframes. Close and reopen the app to verify persistence."
+        } catch (e: Exception) {
+            finalStatus = "Map import failed: ${e.javaClass.simpleName}: ${e.message}"
+        }
+        renderStatus()
     }
 
     private fun button(label: String, action: () -> Unit) = Button(this).apply {
@@ -188,6 +215,22 @@ class MapCaptureActivity : Activity() {
         }
     }
 
+    private fun selectMapArchive() {
+        if (capture != null) {
+            finalStatus = "Stop the active map capture before importing another map."
+            renderStatus()
+            return
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(
+            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "application/zip"
+            },
+            MAP_IMPORT_REQUEST,
+        )
+    }
+
     private fun renderStatus() {
         val map = capture
         val tracking = arView?.snapshot()
@@ -224,5 +267,6 @@ class MapCaptureActivity : Activity() {
 
     companion object {
         private const val CAMERA_REQUEST = 51
+        private const val MAP_IMPORT_REQUEST = 52
     }
 }
