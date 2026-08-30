@@ -1,6 +1,7 @@
 package io.arhome.capabilities
 
 import android.Manifest
+import android.annotation.TargetApi
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -285,6 +286,7 @@ class MainActivity : Activity() {
         }
     }
 
+    @TargetApi(Build.VERSION_CODES.Q)
     private fun writePublicDownload(name: String, content: String): android.net.Uri {
         check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
         val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
