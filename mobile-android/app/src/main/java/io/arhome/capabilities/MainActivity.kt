@@ -2,6 +2,7 @@ package io.arhome.capabilities
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
@@ -23,6 +24,8 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private var session: Session? = null
     private var activeProbe: ActiveArCoreProbeView? = null
+    private var latestReportName: String? = null
+    private var latestReportContent: String? = null
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -40,6 +43,7 @@ class MainActivity : Activity() {
         root.addView(button("Run passive capability probe") { runPassiveProbe() })
         root.addView(button("Start active ARCore probe") { ensureCameraThenStart() })
         root.addView(button("Save active report") { saveActiveReport() })
+        root.addView(button("Export latest report") { exportLatestReport() })
         output = TextView(this).apply {
             textSize = 14f
             movementMethod = ScrollingMovementMethod()
@@ -81,6 +85,30 @@ class MainActivity : Activity() {
             startActiveProbe()
         } else if (requestCode == CAMERA_REQUEST) {
             output.text = "Camera permission denied; active ARCore probe cannot run."
+        }
+    }
+
+    @Deprecated("Uses the platform document picker without adding an AndroidX dependency to the probe")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != EXPORT_REQUEST) return
+        if (resultCode != RESULT_OK) {
+            output.append("\nReport export cancelled. The app-private copy is still available.")
+            return
+        }
+        val uri = data?.data
+        val content = latestReportContent
+        if (uri == null || content == null) {
+            output.append("\nReport export failed: no destination or report content returned.")
+            return
+        }
+        try {
+            val stream = contentResolver.openOutputStream(uri, "w")
+                ?: error("Android could not open the selected destination")
+            stream.bufferedWriter().use { it.write(content) }
+            output.append("\nExported report: $uri")
+        } catch (e: Exception) {
+            output.append("\nReport export failed: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
@@ -146,22 +174,29 @@ class MainActivity : Activity() {
     }
 
     private fun runPassiveProbe() {
-        val report = CapabilityCollector(this).collect()
-        val file = writeReport("capabilities", report.toString(2))
-        output.text = buildString {
-            val device = report.getJSONObject("device")
-            val sensors = report.getJSONObject("sensors")
-            appendLine("AR Home Android capability probe")
-            appendLine("Device: ${device.optString("manufacturer")} ${device.optString("model")}")
-            appendLine("Android: ${device.optString("androidRelease")} / API ${device.optInt("sdkInt")}")
-            appendLine("Rear cameras: ${report.getJSONArray("cameras").length()}")
-            appendLine("Accelerometer: ${!sensors.isNull("accelerometer")}")
-            appendLine("Gyroscope: ${!sensors.isNull("gyroscope")}")
-            appendLine("Rotation vector: ${!sensors.isNull("rotationVector")}")
-            appendLine("Magnetometer: ${!sensors.isNull("magneticField")}")
-            appendLine("Wi-Fi RTT: ${report.optBoolean("wifiRtt")}")
-            appendLine("ARCore: ${report.getJSONObject("arCore").optString("availability")}")
-            appendLine("Report: ${file.absolutePath}")
+        try {
+            val report = CapabilityCollector(this).collect()
+            val content = report.toString(2)
+            val file = writeReport("capabilities", content)
+            rememberReport(file.name, content)
+            output.text = buildString {
+                val device = report.getJSONObject("device")
+                val sensors = report.getJSONObject("sensors")
+                appendLine("AR Home Android capability probe")
+                appendLine("Device: ${device.optString("manufacturer")} ${device.optString("model")}")
+                appendLine("Android: ${device.optString("androidRelease")} / API ${device.optInt("sdkInt")}")
+                appendLine("Rear cameras: ${report.getJSONArray("cameras").length()}")
+                appendLine("Accelerometer: ${!sensors.isNull("accelerometer")}")
+                appendLine("Gyroscope: ${!sensors.isNull("gyroscope")}")
+                appendLine("Rotation vector: ${!sensors.isNull("rotationVector")}")
+                appendLine("Magnetometer: ${!sensors.isNull("magneticField")}")
+                appendLine("Wi-Fi RTT: ${report.optBoolean("wifiRtt")}")
+                appendLine("ARCore: ${report.getJSONObject("arCore").optString("availability")}")
+                appendLine("Private copy: ${file.absolutePath}")
+                appendLine("Tap Export latest report to save it somewhere visible.")
+            }
+        } catch (e: Exception) {
+            output.text = "Passive report failed: ${e.javaClass.simpleName}: ${e.message}"
         }
     }
 
@@ -190,19 +225,59 @@ class MainActivity : Activity() {
             output.text = "Start the active ARCore probe before saving an active report."
             return
         }
-        val report = CapabilityCollector(this).collect().put("activeArCore", active)
-        val file = writeReport("active-arcore", report.toString(2))
-        showActiveSummary(active)
-        output.append("\nSaved: ${file.absolutePath}")
+        try {
+            val report = CapabilityCollector(this).collect().put("activeArCore", active)
+            val content = report.toString(2)
+            val file = writeReport("active-arcore", content)
+            rememberReport(file.name, content)
+            showActiveSummary(active)
+            output.append("\nPrivate copy saved: ${file.absolutePath}")
+            exportLatestReport()
+        } catch (e: Exception) {
+            output.text = "Active report save failed: ${e.javaClass.simpleName}: ${e.message}"
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun exportLatestReport() {
+        val name = latestReportName
+        val content = latestReportContent
+        if (name == null || content == null) {
+            output.text = "No report is available to export yet."
+            return
+        }
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, name)
+        }
+        startActivityForResult(intent, EXPORT_REQUEST)
+    }
+
+    private fun rememberReport(name: String, content: String) {
+        latestReportName = name
+        latestReportContent = content
     }
 
     private fun writeReport(prefix: String, content: String): File {
         val base = getExternalFilesDir(null) ?: filesDir
-        val directory = File(base, "capability-reports").apply { mkdirs() }
-        return File(directory, "$prefix-${System.currentTimeMillis()}.json").also { it.writeText(content) }
+        val directory = File(base, "capability-reports")
+        if (!directory.exists() && !directory.mkdirs()) {
+            error("Could not create report directory: ${directory.absolutePath}")
+        }
+        if (!directory.isDirectory) {
+            error("Report path is not a directory: ${directory.absolutePath}")
+        }
+        val file = File(directory, "$prefix-${System.currentTimeMillis()}.json")
+        file.writeText(content)
+        if (!file.isFile || file.length() == 0L) {
+            error("Report file was not written correctly: ${file.absolutePath}")
+        }
+        return file
     }
 
     companion object {
         private const val CAMERA_REQUEST = 41
+        private const val EXPORT_REQUEST = 42
     }
 }
