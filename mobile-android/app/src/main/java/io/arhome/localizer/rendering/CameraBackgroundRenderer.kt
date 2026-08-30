@@ -12,10 +12,12 @@ import java.nio.FloatBuffer
 class CameraBackgroundRenderer {
 
     private val vertices = floatBufferOf(
-        -1f, -1f,
-        1f, -1f,
-        -1f, 1f,
-        1f, 1f,
+        floatArrayOf(
+            -1f, -1f,
+            1f, -1f,
+            -1f, 1f,
+            1f, 1f,
+        ),
     )
     private val textureCoordinates = floatBufferOf(FloatArray(8))
     private var textureId = 0
