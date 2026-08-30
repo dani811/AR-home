@@ -6,6 +6,7 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.SystemClock
 import com.google.ar.core.Config
+import com.google.ar.core.Frame
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.CameraNotAvailableException
@@ -40,6 +41,9 @@ class ActiveArCoreProbeView(
     private var rawDepthImage: JSONObject? = null
     private var confidenceImage: JSONObject? = null
     private var lastError: String? = null
+
+    @Volatile
+    private var trackedFrameConsumer: ((Frame) -> Unit)? = null
 
     init {
         setEGLContextClientVersion(2)
@@ -100,10 +104,15 @@ class ActiveArCoreProbeView(
         if (camera.trackingState == TrackingState.TRACKING) {
             acquireCpuImage(frame)
             if (automaticDepthSupported) acquireRawDepth(frame)
+            try {
+                trackedFrameConsumer?.invoke(frame)
+            } catch (e: Exception) {
+                synchronized(lock) { lastError = "Frame consumer: ${e.javaClass.simpleName}: ${e.message}" }
+            }
         }
     }
 
-    private fun acquireCpuImage(frame: com.google.ar.core.Frame) {
+    private fun acquireCpuImage(frame: Frame) {
         synchronized(lock) { if (cpuImage != null) return }
         try {
             frame.acquireCameraImage().use { image ->
@@ -121,7 +130,7 @@ class ActiveArCoreProbeView(
         }
     }
 
-    private fun acquireRawDepth(frame: com.google.ar.core.Frame) {
+    private fun acquireRawDepth(frame: Frame) {
         val needDepth = synchronized(lock) { rawDepthImage == null || confidenceImage == null }
         if (!needDepth) return
         try {
@@ -149,6 +158,10 @@ class ActiveArCoreProbeView(
         } catch (e: Exception) {
             synchronized(lock) { lastError = "Raw depth: ${e.javaClass.simpleName}: ${e.message}" }
         }
+    }
+
+    fun setTrackedFrameConsumer(consumer: ((Frame) -> Unit)?) {
+        trackedFrameConsumer = consumer
     }
 
     fun snapshot(): JSONObject = synchronized(lock) {
