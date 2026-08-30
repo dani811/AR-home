@@ -2,11 +2,17 @@ package io.arhome.capabilities
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.text.method.ScrollingMovementMethod
 import android.view.ViewGroup
 import android.widget.Button
@@ -44,6 +50,7 @@ class MainActivity : Activity() {
         root.addView(button("Start active ARCore probe") { ensureCameraThenStart() })
         root.addView(button("Save active report") { saveActiveReport() })
         root.addView(button("Export latest report") { exportLatestReport() })
+        root.addView(button("Copy latest JSON") { copyLatestReport() })
         output = TextView(this).apply {
             textSize = 14f
             movementMethod = ScrollingMovementMethod()
@@ -88,7 +95,7 @@ class MainActivity : Activity() {
         }
     }
 
-    @Deprecated("Uses the platform document picker without adding an AndroidX dependency to the probe")
+    @Deprecated("Fallback document picker for Android 9 and older")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != EXPORT_REQUEST) return
@@ -193,7 +200,7 @@ class MainActivity : Activity() {
                 appendLine("Wi-Fi RTT: ${report.optBoolean("wifiRtt")}")
                 appendLine("ARCore: ${report.getJSONObject("arCore").optString("availability")}")
                 appendLine("Private copy: ${file.absolutePath}")
-                appendLine("Tap Export latest report to save it somewhere visible.")
+                appendLine("Tap Export latest report to create a public copy in Downloads/ARHome.")
             }
         } catch (e: Exception) {
             output.text = "Passive report failed: ${e.javaClass.simpleName}: ${e.message}"
@@ -246,12 +253,60 @@ class MainActivity : Activity() {
             output.text = "No report is available to export yet."
             return
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                val uri = writePublicDownload(name, content)
+                output.append("\nPublic copy saved: Downloads/ARHome/$name\nURI: $uri")
+            } catch (e: Exception) {
+                output.append("\nPublic export failed: ${e.javaClass.simpleName}: ${e.message}")
+            }
+            return
+        }
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "application/json"
             putExtra(Intent.EXTRA_TITLE, name)
         }
         startActivityForResult(intent, EXPORT_REQUEST)
+    }
+
+    private fun copyLatestReport() {
+        val content = latestReportContent
+        if (content == null) {
+            output.text = "No report is available to copy yet."
+            return
+        }
+        try {
+            val clipboard = getSystemService(ClipboardManager::class.java)
+            clipboard.setPrimaryClip(ClipData.newPlainText("AR Home capability report", content))
+            output.append("\nLatest JSON copied to clipboard.")
+        } catch (e: Exception) {
+            output.append("\nClipboard copy failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    private fun writePublicDownload(name: String, content: String): android.net.Uri {
+        check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+        val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/ARHome")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = contentResolver.insert(collection, values)
+            ?: error("Android refused to create the Downloads entry")
+        try {
+            val stream = contentResolver.openOutputStream(uri, "w")
+                ?: error("Android could not open the Downloads entry")
+            stream.bufferedWriter().use { it.write(content) }
+            val publish = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+            contentResolver.update(uri, publish, null, null)
+            return uri
+        } catch (e: Exception) {
+            contentResolver.delete(uri, null, null)
+            throw e
+        }
     }
 
     private fun rememberReport(name: String, content: String) {
