@@ -25,13 +25,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
-      - name: Build and lint capability probe
+      - name: Test, build and lint Android localizer
         working-directory: mobile-android
-        run: gradle :app:assembleDebug :app:lintDebug --stacktrace
+        run: gradle :app:testDebugUnitTest :app:assembleDebug :app:lintDebug --stacktrace
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: ar-home-capability-probe-debug
+          name: ar-home-localizer-debug
           path: mobile-android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
