@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-30T17:23:55.228276Z",
+  "device": {
+    "manufacturer": "motorola",
+    "brand": "motorola",
+    "model": "motorola edge 50 fusion",
+    "device": "cuscoi",
+    "product": "cuscoi_ge",
+    "hardware": "qcom",
+    "androidRelease": "16",
+    "sdkInt": 36,
+    "securityPatch": "2026-07-01"
+  },
+  "cameras": [
+    {
+      "id": "0",
+      "lensFacing": "BACK",
+      "hardwareLevel": "LEVEL_3",
+      "sensorOrientationDegrees": 90,
+      "focalLengthsMm": [5.56],
+      "physicalSizeMm": {"width": 8.224, "height": 6.176},
+      "intrinsicCalibration": [2780, 2779.9998, 2056, 1544, 0],
+      "aeFpsRanges": [
+        {"min": 15, "max": 15},
+        {"min": 15, "max": 20},
+        {"min": 20, "max": 20},
+        {"min": 15, "max": 24},
+        {"min": 24, "max": 24},
+        {"min": 15, "max": 30},
+        {"min": 24, "max": 30},
+        {"min": 25, "max": 30},
+        {"min": 30, "max": 30},
+        {"min": 60, "max": 60}
+      ],
+      "yuv420Sizes": [
+        "4096x3072", "4000x3000", "4096x2304", "3072x3072", "4000x2250", "3840x2160",
+        "3264x2448", "4096x1842", "4000x1800", "3840x1728", "3264x1836", "3264x1468",
+        "2160x2160", "1920x1440", "1920x1080", "1920x864", "1440x1080", "1280x960",
+        "1080x1080", "1280x720", "1024x768", "1280x576", "960x720", "1024x576", "960x540",
+        "720x720", "1024x460", "960x432", "720x480", "640x480", "720x324", "640x360", "640x288",
+        "352x288", "320x240", "176x144"
+      ]
+    }
+  ],
+  "sensors": {
+    "accelerometer": {
+      "name": "icm4x6xx Accelerometer Non-wakeup",
+      "vendor": "TDK-Invensense",
+      "version": 260,
+      "resolution": 0.0047884034,
+      "maximumRange": 156.9064,
+      "minDelayUs": 5000,
+      "powerMa": 0.24,
+      "reportingMode": 0,
+      "wakeUp": false
+    },
+    "gyroscope": {
+      "name": "icm4x6xx Gyroscope Non-wakeup",
+      "vendor": "TDK-Invensense",
+      "version": 260,
+      "resolution": 0.0010652636,
+      "maximumRange": 34.90656,
+      "minDelayUs": 5000,
+      "powerMa": 0.57,
+      "reportingMode": 0,
+      "wakeUp": false
+    },
+    "rotationVector": {
+      "name": "Rotation Vector  Non-wakeup",
+      "vendor": "QTI",
+      "version": 1,
+      "resolution": 0.01,
+      "maximumRange": 1,
+      "minDelayUs": 5000,
+      "powerMa": 1.415,
+      "reportingMode": 0,
+      "wakeUp": false
+    },
+    "magneticField": {
+      "name": "qmc630x Magnetometer Non-wakeup",
+      "vendor": "QST",
+      "version": 131329,
+      "resolution": 0.1,
+      "maximumRange": 3000,
+      "minDelayUs": 10000,
+      "powerMa": 1.5,
+      "reportingMode": 0,
+      "wakeUp": false
+    }
+  },
+  "wifiRtt": false,
+  "arCore": {
+    "availability": "SUPPORTED_INSTALLED",
+    "supported": true,
+    "transient": false
+  },
+  "runtime": {
+    "batteryTemperatureC": 31,
+    "memoryMaxBytes": 268435456,
+    "memoryTotalBytes": 29317856,
+    "memoryFreeBytes": 24148656,
+    "availableProcessors": 8
+  },
+  "activeArCore": {
+    "automaticDepthSupported": true,
+    "rawDepthModeSupported": true,
+    "frameCount": 69,
+    "trackingFrames": 33,
+    "pausedFrames": 36,
+    "trackingFailureReason": "NONE",
+    "durationSeconds": 2.581781041,
+    "averageUpdateHz": 26.338407060910786,
+    "maxFrameGapMs": 83.286823,
+    "poseTranslationMeters": [0.062894955, 0.014936734, -0.018787757],
+    "poseRotationQuaternion": [-0.3156043, -0.2554929, -0.56908685, 0.71502274],
+    "imageFocalLengthPixels": [435.56976, 434.71707],
+    "imagePrincipalPointPixels": [317.87158, 240.70247],
+    "imageDimensionsPixels": [640, 480],
+    "cpuCameraImage": {
+      "width": 640,
+      "height": 480,
+      "format": 35,
+      "timestampNs": 692915631467104
+    },
+    "rawDepthImage": {
+      "width": 160,
+      "height": 90,
+      "timestampNs": 692915631467104
+    },
+    "rawDepthConfidenceImage": {
+      "width": 160,
+      "height": 90,
+      "timestampNs": 692915631467104
+    },
+    "lastError": null
+  }
+}
