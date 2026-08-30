@@ -1,7 +1,6 @@
 package io.arhome.capabilities
 
 import android.content.Context
-import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.SystemClock
@@ -11,6 +10,7 @@ import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.CameraNotAvailableException
 import com.google.ar.core.exceptions.NotYetAvailableException
+import io.arhome.localizer.rendering.CameraBackgroundRenderer
 import org.json.JSONArray
 import org.json.JSONObject
 import javax.microedition.khronos.egl.EGLConfig
@@ -24,7 +24,7 @@ class ActiveArCoreProbeView(
 ) : GLSurfaceView(context), GLSurfaceView.Renderer {
 
     private val lock = Any()
-    private var textureId = 0
+    private val backgroundRenderer = CameraBackgroundRenderer()
     private var frameCount = 0L
     private var trackingFrames = 0L
     private var pausedFrames = 0L
@@ -52,13 +52,7 @@ class ActiveArCoreProbeView(
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        val textures = IntArray(1)
-        GLES20.glGenTextures(1, textures, 0)
-        textureId = textures[0]
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-        session.setCameraTextureNames(intArrayOf(textureId))
+        backgroundRenderer.create(session)
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -79,6 +73,7 @@ class ActiveArCoreProbeView(
             return
         }
 
+        backgroundRenderer.draw(frame)
         val camera = frame.camera
         synchronized(lock) {
             frameCount++
