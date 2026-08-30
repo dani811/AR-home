@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.view.ViewGroup
 import android.widget.Button
@@ -18,8 +19,12 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
+import com.google.ar.core.Pose
 import com.google.ar.core.Session
 import io.arhome.capabilities.ActiveArCoreProbeView
+import io.arhome.localizer.localization.CoarseKeyframeLocalizationProvider
+import io.arhome.localizer.localization.WorldAlignment
+import io.arhome.localizer.map.PersistentMap
 import io.arhome.localizer.map.PersistentMapStore
 import java.io.File
 
@@ -32,6 +37,12 @@ class MapCaptureActivity : Activity() {
     private var session: Session? = null
     private var arView: ActiveArCoreProbeView? = null
     private var capture: MapCaptureSession? = null
+    private var persistentMap: PersistentMap? = null
+    private var relocalizer: CoarseKeyframeLocalizationProvider? = null
+    @Volatile private var alignment: WorldAlignment? = null
+    @Volatile private var worldCameraPose: Pose? = null
+    @Volatile private var relocalizationMs: Long? = null
+    private var relocalizationStartedNs = 0L
     private var finalStatus = "Ready. No QR or marker is required."
 
     private val refresh = object : Runnable {
@@ -44,7 +55,8 @@ class MapCaptureActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         mapStore = PersistentMapStore(File(filesDir, "persistent-map"))
-        mapStore.currentOrNull()?.let {
+        persistentMap = mapStore.currentOrNull()
+        persistentMap?.let {
             finalStatus = "Persistent map ready: ${it.sessionId} · ${it.keyframes.size} keyframes."
         }
         root = LinearLayout(this).apply {
@@ -52,16 +64,17 @@ class MapCaptureActivity : Activity() {
             setPadding(32, 32, 32, 32)
         }
         root.addView(TextView(this).apply {
-            text = "AR Home Localizer · Map Capture"
+            text = "AR Home Localizer"
             textSize = 20f
         })
         root.addView(TextView(this).apply {
-            text = "Walk through the room and look at each piece of furniture from different viewpoints. The capture uses natural visual features, ARCore pose and camera intrinsics."
+            text = "Map a room from natural visual features, persist the ZIP, then relocalize from a fresh ARCore session without QR or markers."
             textSize = 14f
         })
         root.addView(button("Start mapping") { ensureCameraAndStart() })
         root.addView(button("Stop and export map") { stopAndExport() })
         root.addView(button("Import persistent map ZIP") { selectMapArchive() })
+        root.addView(button("Start fresh-session relocalization") { ensureCameraAndRelocalize() })
         status = TextView(this).apply { textSize = 14f }
         root.addView(status)
         setContentView(root)
@@ -98,11 +111,14 @@ class MapCaptureActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, results)
-        if (requestCode == CAMERA_REQUEST && results.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            startMapping()
-        } else if (requestCode == CAMERA_REQUEST) {
-            finalStatus = "Camera permission is required for visual mapping."
+        if (results.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
+            finalStatus = "Camera permission is required."
             renderStatus()
+            return
+        }
+        when (requestCode) {
+            CAMERA_REQUEST -> startMapping()
+            RELOCALIZATION_CAMERA_REQUEST -> startRelocalization()
         }
     }
 
@@ -118,7 +134,8 @@ class MapCaptureActivity : Activity() {
         try {
             val input = contentResolver.openInputStream(uri) ?: error("Android could not open the selected ZIP")
             val map = input.use(mapStore::import)
-            finalStatus = "Persistent map imported: ${map.sessionId} · ${map.keyframes.size} keyframes. Close and reopen the app to verify persistence."
+            persistentMap = map
+            finalStatus = "Persistent map imported: ${map.sessionId} · ${map.keyframes.size} keyframes. It will survive a full app restart."
         } catch (e: Exception) {
             finalStatus = "Map import failed: ${e.javaClass.simpleName}: ${e.message}"
         }
@@ -131,8 +148,8 @@ class MapCaptureActivity : Activity() {
     }
 
     private fun ensureCameraAndStart() {
-        if (capture != null) {
-            finalStatus = "A map capture is already running."
+        if (session != null) {
+            finalStatus = "An ARCore session is already running. Restart the app before starting another mode."
             renderStatus()
             return
         }
@@ -143,52 +160,109 @@ class MapCaptureActivity : Activity() {
         }
     }
 
+    private fun ensureCameraAndRelocalize() {
+        if (persistentMap == null) {
+            finalStatus = "Import a persistent map ZIP before relocalizing."
+            renderStatus()
+            return
+        }
+        if (session != null) {
+            finalStatus = "A fresh ARCore session is required. Fully restart the app, then tap relocalization."
+            renderStatus()
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), RELOCALIZATION_CAMERA_REQUEST)
+        } else {
+            startRelocalization()
+        }
+    }
+
     private fun startMapping() {
         try {
-            val availability = ArCoreApk.getInstance().checkAvailability(this)
-            check(!availability.isTransient && availability.isSupported) { "ARCore unavailable: ${availability.name}" }
-            if (availability != ArCoreApk.Availability.SUPPORTED_INSTALLED) {
-                val install = ArCoreApk.getInstance().requestInstall(this, true)
-                finalStatus = "ARCore install/update result: $install. Tap Start mapping again after returning."
-                renderStatus()
-                return
-            }
-
-            val newSession = Session(this)
-            val config = newSession.config
-            if (newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
-                config.depthMode = Config.DepthMode.AUTOMATIC
-            }
-            newSession.configure(config)
-
-            val view = ActiveArCoreProbeView(
-                this,
-                newSession,
-                newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC),
-                newSession.isDepthModeSupported(Config.DepthMode.RAW_DEPTH_ONLY),
-            )
+            val newSession = createSession("Start mapping") ?: return
+            val view = createView(newSession)
             val mapCapture = MapCaptureSession(this)
             view.setTrackedFrameConsumer(mapCapture::onFrame)
-            root.addView(
-                view,
-                2,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
-            )
-            session = newSession
-            arView = view
+            attachSession(newSession, view)
             capture = mapCapture
             finalStatus = "Mapping started. Move naturally and inspect furniture from multiple angles."
-            newSession.resume()
-            view.onResume()
-            handler.post(refresh)
         } catch (e: Exception) {
-            session?.close()
-            session = null
-            arView = null
-            capture = null
-            finalStatus = "Map capture failed: ${e.javaClass.simpleName}: ${e.message}"
-            renderStatus()
+            resetFailedSession("Map capture failed", e)
         }
+    }
+
+    private fun startRelocalization() {
+        val map = persistentMap ?: return
+        try {
+            val newSession = createSession("Start relocalization") ?: return
+            val view = createView(newSession)
+            val provider = CoarseKeyframeLocalizationProvider()
+            alignment = null
+            worldCameraPose = null
+            relocalizationMs = null
+            relocalizationStartedNs = SystemClock.elapsedRealtimeNanos()
+            view.setTrackedFrameConsumer { frame ->
+                val currentAlignment = alignment
+                if (currentAlignment == null) {
+                    provider.localize(map, frame)?.let { result ->
+                        val created = WorldAlignment.fromLocalization(result, frame.camera.pose)
+                        alignment = created
+                        worldCameraPose = created.worldCameraPose(frame.camera.pose)
+                        relocalizationMs = (SystemClock.elapsedRealtimeNanos() - relocalizationStartedNs) / 1_000_000L
+                    }
+                } else {
+                    worldCameraPose = currentAlignment.worldCameraPose(frame.camera.pose)
+                }
+            }
+            relocalizer = provider
+            attachSession(newSession, view)
+            finalStatus = "Fresh-session relocalization running. Slowly look at distinctive room features and the mapped furniture."
+        } catch (e: Exception) {
+            resetFailedSession("Relocalization failed", e)
+        }
+    }
+
+    private fun createSession(action: String): Session? {
+        val availability = ArCoreApk.getInstance().checkAvailability(this)
+        check(!availability.isTransient && availability.isSupported) { "ARCore unavailable: ${availability.name}" }
+        if (availability != ArCoreApk.Availability.SUPPORTED_INSTALLED) {
+            val install = ArCoreApk.getInstance().requestInstall(this, true)
+            finalStatus = "ARCore install/update result: $install. Tap $action again after returning."
+            renderStatus()
+            return null
+        }
+        return Session(this).also { newSession ->
+            val config = newSession.config
+            if (newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) config.depthMode = Config.DepthMode.AUTOMATIC
+            newSession.configure(config)
+        }
+    }
+
+    private fun createView(newSession: Session) = ActiveArCoreProbeView(
+        this,
+        newSession,
+        newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC),
+        newSession.isDepthModeSupported(Config.DepthMode.RAW_DEPTH_ONLY),
+    )
+
+    private fun attachSession(newSession: Session, view: ActiveArCoreProbeView) {
+        root.addView(view, 2, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        session = newSession
+        arView = view
+        newSession.resume()
+        view.onResume()
+        handler.post(refresh)
+    }
+
+    private fun resetFailedSession(prefix: String, error: Exception) {
+        session?.close()
+        session = null
+        arView = null
+        capture = null
+        relocalizer = null
+        finalStatus = "$prefix: ${error.javaClass.simpleName}: ${error.message}"
+        renderStatus()
     }
 
     private fun stopAndExport() {
@@ -207,7 +281,7 @@ class MapCaptureActivity : Activity() {
             } else {
                 result.archive.absolutePath
             }
-            finalStatus = "Map complete: ${result.keyframeCount} keyframes\nSaved: $publicLocation"
+            finalStatus = "Map complete: ${result.keyframeCount} keyframes\nSaved: $publicLocation\nFully restart the app before the fresh-session test."
             renderStatus()
         } catch (e: Exception) {
             finalStatus = "Map export failed: ${e.javaClass.simpleName}: ${e.message}"
@@ -216,8 +290,8 @@ class MapCaptureActivity : Activity() {
     }
 
     private fun selectMapArchive() {
-        if (capture != null) {
-            finalStatus = "Stop the active map capture before importing another map."
+        if (session != null) {
+            finalStatus = "Restart the app before importing a map so no ARCore session is active."
             renderStatus()
             return
         }
@@ -232,11 +306,23 @@ class MapCaptureActivity : Activity() {
     }
 
     private fun renderStatus() {
-        val map = capture
+        val mapCapture = capture
         val tracking = arView?.snapshot()
         status.text = buildString {
             appendLine(finalStatus)
-            if (map != null) appendLine("Keyframes: ${map.keyframeCount}")
+            if (mapCapture != null) appendLine("Keyframes: ${mapCapture.keyframeCount}")
+            relocalizer?.latestStatus?.let { match ->
+                appendLine("Matcher: ${match.message}")
+                appendLine("Best keyframe: ${match.bestKeyframeId ?: "—"}")
+                appendLine("Correlation: %.3f · stable hits: ${match.stableHits} · references: ${match.referenceCount}".format(match.correlation))
+            }
+            alignment?.let { accepted ->
+                appendLine("RELOCALIZED · keyframe ${accepted.source.matchedKeyframeId} · confidence %.3f · ${relocalizationMs ?: 0} ms".format(accepted.source.confidence))
+                worldCameraPose?.translation?.let { xyz ->
+                    appendLine("World camera xyz: %.2f, %.2f, %.2f m".format(xyz[0], xyz[1], xyz[2]))
+                }
+                appendLine("Geometric inliers: 0 (coarse matcher; PnP/RANSAC not implemented yet)")
+            }
             if (tracking != null) {
                 appendLine("ARCore tracking frames: ${tracking.optLong("trackingFrames")}")
                 appendLine("Tracking failure: ${tracking.optString("trackingFailureReason")}")
@@ -268,5 +354,6 @@ class MapCaptureActivity : Activity() {
     companion object {
         private const val CAMERA_REQUEST = 51
         private const val MAP_IMPORT_REQUEST = 52
+        private const val RELOCALIZATION_CAMERA_REQUEST = 53
     }
 }
