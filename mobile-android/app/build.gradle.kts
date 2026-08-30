@@ -22,5 +22,6 @@ android {
 
 dependencies {
     implementation("com.google.ar:core:1.54.0")
+    implementation("org.opencv:opencv:4.14.0")
     testImplementation("junit:junit:4.13.2")
 }
