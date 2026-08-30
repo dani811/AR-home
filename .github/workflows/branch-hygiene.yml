@@ -71,7 +71,8 @@ jobs:
 
               case "${status}" in
                 204) echo "Deleted ${head_ref}" ;;
-                422) echo "Already absent/protected: ${head_ref}" ;;
+                404) echo "Already absent: ${head_ref}" ;;
+                422) echo "Protected or not deletable: ${head_ref}" ;;
                 *)
                   cat /tmp/delete-ref-response >&2 || true
                   echo "Failed deleting ${head_ref}: HTTP ${status}" >&2
