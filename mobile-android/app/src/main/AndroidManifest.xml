@@ -8,7 +8,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="AR Home Capability Probe"
+        android:label="AR Home Localizer"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
@@ -17,13 +17,17 @@
             android:value="optional" />
 
         <activity
-            android:name=".MainActivity"
+            android:name="io.arhome.localizer.capture.MapCaptureActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
     </application>
 
 </manifest>
