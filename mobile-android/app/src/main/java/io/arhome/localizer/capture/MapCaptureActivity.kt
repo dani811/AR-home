@@ -22,7 +22,7 @@ import com.google.ar.core.Config
 import com.google.ar.core.Pose
 import com.google.ar.core.Session
 import io.arhome.capabilities.ActiveArCoreProbeView
-import io.arhome.localizer.localization.CoarseKeyframeLocalizationProvider
+import io.arhome.localizer.localization.OrbKeyframeLocalizationProvider
 import io.arhome.localizer.localization.WorldAlignment
 import io.arhome.localizer.map.PersistentMap
 import io.arhome.localizer.map.PersistentMapStore
@@ -38,7 +38,7 @@ class MapCaptureActivity : Activity() {
     private var arView: ActiveArCoreProbeView? = null
     private var capture: MapCaptureSession? = null
     private var persistentMap: PersistentMap? = null
-    private var relocalizer: CoarseKeyframeLocalizationProvider? = null
+    private var relocalizer: OrbKeyframeLocalizationProvider? = null
     @Volatile private var alignment: WorldAlignment? = null
     @Volatile private var worldCameraPose: Pose? = null
     @Volatile private var relocalizationMs: Long? = null
@@ -197,7 +197,7 @@ class MapCaptureActivity : Activity() {
         try {
             val newSession = createSession("Start relocalization") ?: return
             val view = createView(newSession)
-            val provider = CoarseKeyframeLocalizationProvider()
+            val provider = OrbKeyframeLocalizationProvider()
             alignment = null
             worldCameraPose = null
             relocalizationMs = null
@@ -217,7 +217,7 @@ class MapCaptureActivity : Activity() {
             }
             relocalizer = provider
             attachSession(newSession, view)
-            finalStatus = "Fresh-session relocalization running. Slowly look at distinctive room features and the mapped furniture."
+            finalStatus = "Fresh-session geometric relocalization running. Look at the mapped furniture and surrounding room detail."
         } catch (e: Exception) {
             resetFailedSession("Relocalization failed", e)
         }
@@ -314,14 +314,15 @@ class MapCaptureActivity : Activity() {
             relocalizer?.latestStatus?.let { match ->
                 appendLine("Matcher: ${match.message}")
                 appendLine("Best keyframe: ${match.bestKeyframeId ?: "—"}")
-                appendLine("Correlation: %.3f · stable hits: ${match.stableHits} · references: ${match.referenceCount}".format(match.correlation))
+                appendLine("ORB good matches: ${match.goodMatches} · RANSAC inliers: ${match.inliers} · ratio: %.2f".format(match.inlierRatio))
+                appendLine("Stable hits: ${match.stableHits} · references: ${match.referenceCount}")
             }
             alignment?.let { accepted ->
                 appendLine("RELOCALIZED · keyframe ${accepted.source.matchedKeyframeId} · confidence %.3f · ${relocalizationMs ?: 0} ms".format(accepted.source.confidence))
                 worldCameraPose?.translation?.let { xyz ->
                     appendLine("World camera xyz: %.2f, %.2f, %.2f m".format(xyz[0], xyz[1], xyz[2]))
                 }
-                appendLine("Geometric inliers: 0 (coarse matcher; PnP/RANSAC not implemented yet)")
+                appendLine("Geometric inliers: ${accepted.source.inlierCount} (ORB + homography RANSAC; 2D→3D PnP is next)")
             }
             if (tracking != null) {
                 appendLine("ARCore tracking frames: ${tracking.optLong("trackingFrames")}")
