@@ -1,9 +1,7 @@
 package io.arhome.localizer.localization
 
-import android.media.Image
 import com.google.ar.core.Frame
 import com.google.ar.core.Pose
-import com.google.ar.core.exceptions.NotYetAvailableException
 import io.arhome.localizer.map.PersistentKeyframe
 import io.arhome.localizer.map.PersistentMap
 import kotlin.math.min
@@ -11,7 +9,6 @@ import kotlin.math.sqrt
 import org.opencv.android.OpenCVLoader
 import org.opencv.calib3d.Calib3d
 import org.opencv.core.Core
-import org.opencv.core.CvType
 import org.opencv.core.DMatch
 import org.opencv.core.KeyPoint
 import org.opencv.core.Mat
@@ -76,26 +73,18 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
         latestStatus = OrbMatchStatus(referenceCount = references.size, message = "ORB visual map prepared")
     }
 
-    override fun localize(map: PersistentMap, frame: Frame): LocalizationResult? {
-        if (frame.timestamp - lastAttemptTimestampNs < MIN_ATTEMPT_INTERVAL_NS) return null
-        lastAttemptTimestampNs = frame.timestamp
-        prepare(map)
+    override fun localize(map: PersistentMap, frame: Frame): LocalizationResult? =
+        CapturedLocalizationFrame.capture(frame)?.use { localize(map, it) }
 
-        val imageTimestamp: Long
-        val queryGray: Mat
-        try {
-            frame.acquireCameraImage().use { image ->
-                imageTimestamp = image.timestamp
-                queryGray = cameraGray(image)
-            }
-        } catch (_: NotYetAvailableException) {
-            return null
-        }
+    fun localize(map: PersistentMap, frame: CapturedLocalizationFrame): LocalizationResult? {
+        if (frame.frameTimestampNs - lastAttemptTimestampNs < MIN_ATTEMPT_INTERVAL_NS) return null
+        lastAttemptTimestampNs = frame.frameTimestampNs
+        prepare(map)
 
         val queryKeypointMat = MatOfKeyPoint()
         val queryDescriptors = Mat()
         try {
-            orb.detectAndCompute(queryGray, Mat(), queryKeypointMat, queryDescriptors)
+            orb.detectAndCompute(frame.gray, Mat(), queryKeypointMat, queryDescriptors)
             if (queryDescriptors.empty() || queryDescriptors.rows() < MIN_QUERY_FEATURES) {
                 resetCandidate("Too few local features · point at furniture edges, handles or room detail")
                 return null
@@ -148,10 +137,9 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
                 matchedKeyframeId = best.reference.keyframe.id,
                 confidence = confidence,
                 inlierCount = best.inliers,
-                timestampNs = imageTimestamp,
+                timestampNs = frame.imageTimestampNs,
             )
         } finally {
-            queryGray.release()
             queryKeypointMat.release()
             queryDescriptors.release()
         }
@@ -213,20 +201,6 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
             referencePoints.release()
             mask.release()
         }
-    }
-
-    private fun cameraGray(image: Image): Mat {
-        val plane = image.planes[0]
-        val buffer = plane.buffer.duplicate()
-        val pixels = ByteArray(image.width * image.height)
-        var target = 0
-        for (y in 0 until image.height) {
-            val row = y * plane.rowStride
-            for (x in 0 until image.width) {
-                pixels[target++] = buffer.get(row + x * plane.pixelStride)
-            }
-        }
-        return Mat(image.height, image.width, CvType.CV_8UC1).also { it.put(0, 0, pixels) }
     }
 
     private fun resetCandidate(message: String) {
