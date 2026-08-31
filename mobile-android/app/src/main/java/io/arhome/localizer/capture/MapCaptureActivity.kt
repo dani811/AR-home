@@ -22,12 +22,14 @@ import com.google.ar.core.Config
 import com.google.ar.core.Pose
 import com.google.ar.core.Session
 import io.arhome.capabilities.ActiveArCoreProbeView
+import io.arhome.localizer.localization.CapturedLocalizationFrame
 import io.arhome.localizer.localization.OrbKeyframeLocalizationProvider
 import io.arhome.localizer.localization.PnpLandmarkLocalizationProvider
 import io.arhome.localizer.localization.WorldAlignment
 import io.arhome.localizer.map.PersistentMap
 import io.arhome.localizer.map.PersistentMapStore
 import java.io.File
+import java.util.concurrent.Executors
 
 class MapCaptureActivity : Activity() {
 
@@ -35,6 +37,7 @@ class MapCaptureActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var mapStore: PersistentMapStore
     private val handler = Handler(Looper.getMainLooper())
+    private val localizationExecutor = Executors.newSingleThreadExecutor()
     private var session: Session? = null
     private var arView: ActiveArCoreProbeView? = null
     private var capture: MapCaptureSession? = null
@@ -43,10 +46,14 @@ class MapCaptureActivity : Activity() {
     private var pnpRelocalizer: PnpLandmarkLocalizationProvider? = null
     @Volatile private var pnpEnabled = false
     @Volatile private var pnpDisabledReason: String? = null
+    @Volatile private var relocalizationPreparing = false
+    @Volatile private var localizationInFlight = false
+    @Volatile private var localizationRuntimeError: String? = null
     @Volatile private var acceptedPoseSource: String? = null
     @Volatile private var alignment: WorldAlignment? = null
     @Volatile private var worldCameraPose: Pose? = null
     @Volatile private var relocalizationMs: Long? = null
+    @Volatile private var preparationMs: Long? = null
     private var relocalizationStartedNs = 0L
     private var finalStatus = "Ready. No QR or marker is required."
 
@@ -109,6 +116,7 @@ class MapCaptureActivity : Activity() {
     override fun onDestroy() {
         handler.removeCallbacks(refresh)
         arView?.setTrackedFrameConsumer(null)
+        localizationExecutor.shutdownNow()
         session?.close()
         session = null
         super.onDestroy()
@@ -153,6 +161,11 @@ class MapCaptureActivity : Activity() {
     }
 
     private fun ensureCameraAndStart() {
+        if (relocalizationPreparing) {
+            finalStatus = "Wait for relocalization map preparation to finish before starting mapping."
+            renderStatus()
+            return
+        }
         if (session != null) {
             finalStatus = "An ARCore session is already running. Restart the app before starting another mode."
             renderStatus()
@@ -173,6 +186,11 @@ class MapCaptureActivity : Activity() {
         }
         if (session != null) {
             finalStatus = "A fresh ARCore session is required. Fully restart the app, then tap relocalization."
+            renderStatus()
+            return
+        }
+        if (relocalizationPreparing) {
+            finalStatus = "Relocalization map preparation is already running."
             renderStatus()
             return
         }
@@ -199,57 +217,96 @@ class MapCaptureActivity : Activity() {
 
     private fun startRelocalization() {
         val map = persistentMap ?: return
-        try {
-            finalStatus = "Preparing PnP landmarks and ORB fallback (${map.keyframes.size} keyframes)…"
-            renderStatus()
-
-            // Both providers prewarm before ARCore starts so the render loop never pays
-            // the native OpenCV and reference-map preparation cost on its first frame.
-            val pnpProvider = PnpLandmarkLocalizationProvider()
-            pnpRelocalizer = pnpProvider
-            pnpEnabled = try {
-                pnpProvider.prepare(map)
-                pnpDisabledReason = null
-                true
+        relocalizationPreparing = true
+        preparationMs = null
+        finalStatus = "Preparing PnP landmarks and ORB fallback in background (${map.keyframes.size} keyframes)…"
+        renderStatus()
+        val preparationStartedNs = SystemClock.elapsedRealtimeNanos()
+        localizationExecutor.execute {
+            try {
+                // Both providers prewarm before ARCore starts, away from the UI thread.
+                val pnpProvider = PnpLandmarkLocalizationProvider()
+                var pnpFailure: String? = null
+                val pnpReady = try {
+                    pnpProvider.prepare(map)
+                    true
+                } catch (e: Exception) {
+                    pnpFailure = "PnP unavailable: ${e.message}"
+                    false
+                }
+                val orbProvider = OrbKeyframeLocalizationProvider().also { it.prepare(map) }
+                val elapsedMs = (SystemClock.elapsedRealtimeNanos() - preparationStartedNs) / 1_000_000L
+                handler.post {
+                    if (isDestroyed) return@post
+                    relocalizationPreparing = false
+                    preparationMs = elapsedMs
+                    pnpRelocalizer = pnpProvider
+                    orbRelocalizer = orbProvider
+                    pnpEnabled = pnpReady
+                    pnpDisabledReason = pnpFailure
+                    startPreparedRelocalization(map, pnpProvider, orbProvider)
+                }
+            } catch (e: LinkageError) {
+                reportPreparationFailure("Relocalization native runtime failed", e)
             } catch (e: Exception) {
-                pnpDisabledReason = "PnP unavailable: ${e.message}"
-                false
+                reportPreparationFailure("Relocalization preparation failed", e)
             }
-            val orbProvider = OrbKeyframeLocalizationProvider().also { it.prepare(map) }
-            orbRelocalizer = orbProvider
+        }
+    }
 
+    private fun startPreparedRelocalization(
+        map: PersistentMap,
+        pnpProvider: PnpLandmarkLocalizationProvider,
+        orbProvider: OrbKeyframeLocalizationProvider,
+    ) {
+        try {
             val newSession = createSession("Start relocalization") ?: return
             val view = createView(newSession)
             alignment = null
             worldCameraPose = null
             relocalizationMs = null
+            localizationRuntimeError = null
             acceptedPoseSource = null
             relocalizationStartedNs = SystemClock.elapsedRealtimeNanos()
             view.setTrackedFrameConsumer { frame ->
                 val currentAlignment = alignment
-                if (currentAlignment == null) {
-                    val pnpResult = if (pnpEnabled) {
-                        try {
-                            pnpProvider.localize(map, frame)
-                        } catch (e: Exception) {
-                            pnpEnabled = false
-                            pnpDisabledReason = "PnP disabled after runtime error: ${e.message}"
-                            null
-                        }
-                    } else {
-                        null
-                    }
-                    val sourceAndResult = pnpResult?.let { "PnP" to it }
-                        ?: orbProvider.localize(map, frame)?.let { "ORB/homography fallback" to it }
-                    sourceAndResult?.let { (source, result) ->
-                        val created = WorldAlignment.fromLocalization(result, frame.camera.pose)
-                        alignment = created
-                        worldCameraPose = created.worldCameraPose(frame.camera.pose)
-                        acceptedPoseSource = source
-                        relocalizationMs = (SystemClock.elapsedRealtimeNanos() - relocalizationStartedNs) / 1_000_000L
-                    }
-                } else {
+                if (currentAlignment != null) {
                     worldCameraPose = currentAlignment.worldCameraPose(frame.camera.pose)
+                } else if (!localizationInFlight) {
+                    CapturedLocalizationFrame.capture(frame)?.let { captured ->
+                        localizationInFlight = true
+                        localizationExecutor.execute {
+                            try {
+                                val pnpResult = if (pnpEnabled) {
+                                    try {
+                                        pnpProvider.localize(map, captured)
+                                    } catch (e: Exception) {
+                                        pnpEnabled = false
+                                        pnpDisabledReason = "PnP disabled after runtime error: ${e.message}"
+                                        null
+                                    }
+                                } else {
+                                    null
+                                }
+                                val sourceAndResult = pnpResult?.let { "PnP" to it }
+                                    ?: orbProvider.localize(map, captured)?.let { "ORB/homography fallback" to it }
+                                sourceAndResult?.let { (source, result) ->
+                                    val created = WorldAlignment.fromLocalization(result, captured.cameraPose)
+                                    alignment = created
+                                    worldCameraPose = created.worldCameraPose(captured.cameraPose)
+                                    acceptedPoseSource = source
+                                    relocalizationMs = (SystemClock.elapsedRealtimeNanos() - relocalizationStartedNs) / 1_000_000L
+                                }
+                            } catch (e: LinkageError) {
+                                localizationRuntimeError = "Native localization error: ${e.message}"
+                            } catch (e: Exception) {
+                                localizationRuntimeError = "Localization error: ${e.javaClass.simpleName}: ${e.message}"
+                            } finally {
+                                captured.close()
+                                localizationInFlight = false
+                            }
+                        }
+                    }
                 }
             }
             attachSession(newSession, view)
@@ -258,6 +315,14 @@ class MapCaptureActivity : Activity() {
             resetFailedSession("Relocalization native runtime failed", e)
         } catch (e: Exception) {
             resetFailedSession("Relocalization failed", e)
+        }
+    }
+
+    private fun reportPreparationFailure(prefix: String, error: Throwable) {
+        handler.post {
+            if (isDestroyed) return@post
+            relocalizationPreparing = false
+            resetFailedSession(prefix, error)
         }
     }
 
@@ -304,6 +369,9 @@ class MapCaptureActivity : Activity() {
         pnpRelocalizer = null
         pnpEnabled = false
         pnpDisabledReason = null
+        relocalizationPreparing = false
+        localizationInFlight = false
+        localizationRuntimeError = null
         acceptedPoseSource = null
         finalStatus = "$prefix: ${error.javaClass.simpleName}: ${error.message}"
         renderStatus()
@@ -334,6 +402,11 @@ class MapCaptureActivity : Activity() {
     }
 
     private fun selectMapArchive() {
+        if (relocalizationPreparing) {
+            finalStatus = "Wait for relocalization map preparation to finish before importing another map."
+            renderStatus()
+            return
+        }
         if (session != null) {
             finalStatus = "Restart the app before importing a map so no ARCore session is active."
             renderStatus()
@@ -355,11 +428,13 @@ class MapCaptureActivity : Activity() {
         status.text = buildString {
             appendLine(finalStatus)
             if (mapCapture != null) appendLine("Keyframes: ${mapCapture.keyframeCount}")
+            preparationMs?.let { appendLine("Map preparation: $it ms (background)") }
             pnpRelocalizer?.latestStatus?.let { match ->
                 appendLine("PnP: ${match.message}")
                 appendLine("Landmarks: ${match.landmarks} · good matches: ${match.goodMatches} · PnP inliers: ${match.pnpInliers}")
             }
             pnpDisabledReason?.let { appendLine(it) }
+            localizationRuntimeError?.let { appendLine(it) }
             orbRelocalizer?.latestStatus?.let { match ->
                 appendLine("ORB fallback: ${match.message}")
                 appendLine("Best keyframe: ${match.bestKeyframeId ?: "—"}")
@@ -376,6 +451,7 @@ class MapCaptureActivity : Activity() {
             }
             if (tracking != null) {
                 appendLine("ARCore tracking frames: ${tracking.optLong("trackingFrames")}")
+                appendLine("Max ARCore frame gap: %.1f ms".format(tracking.optDouble("maxFrameGapMs")))
                 appendLine("Tracking failure: ${tracking.optString("trackingFailureReason")}")
                 tracking.opt("lastError")?.let { error ->
                     if (error.toString() != "null") appendLine("Runtime error: $error")

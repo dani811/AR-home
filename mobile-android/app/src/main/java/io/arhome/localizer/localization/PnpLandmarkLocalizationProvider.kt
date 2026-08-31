@@ -1,9 +1,7 @@
 package io.arhome.localizer.localization
 
-import android.media.Image
 import com.google.ar.core.Frame
 import com.google.ar.core.Pose
-import com.google.ar.core.exceptions.NotYetAvailableException
 import io.arhome.localizer.map.PersistentMap
 import kotlin.math.sqrt
 import org.opencv.android.OpenCVLoader
@@ -55,27 +53,19 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
         preparedSessionId = map.sessionId
     }
 
-    override fun localize(map: PersistentMap, frame: Frame): LocalizationResult? {
-        if (frame.timestamp - lastAttemptTimestampNs < MIN_ATTEMPT_INTERVAL_NS) return null
-        lastAttemptTimestampNs = frame.timestamp
+    override fun localize(map: PersistentMap, frame: Frame): LocalizationResult? =
+        CapturedLocalizationFrame.capture(frame)?.use { localize(map, it) }
+
+    fun localize(map: PersistentMap, frame: CapturedLocalizationFrame): LocalizationResult? {
+        if (frame.frameTimestampNs - lastAttemptTimestampNs < MIN_ATTEMPT_INTERVAL_NS) return null
+        lastAttemptTimestampNs = frame.frameTimestampNs
         prepare(map)
         val built = landmarkMap ?: return null
-
-        val imageTimestamp: Long
-        val gray: Mat
-        try {
-            frame.acquireCameraImage().use { image ->
-                imageTimestamp = image.timestamp
-                gray = cameraGray(image)
-            }
-        } catch (_: NotYetAvailableException) {
-            return null
-        }
 
         val keypointMat = MatOfKeyPoint()
         val queryDescriptors = Mat()
         try {
-            orb.detectAndCompute(gray, Mat(), keypointMat, queryDescriptors)
+            orb.detectAndCompute(frame.gray, Mat(), keypointMat, queryDescriptors)
             if (queryDescriptors.empty()) return null
             val queryKeypoints = keypointMat.toList()
             val pairs = mutableListOf<MatOfDMatch>()
@@ -100,9 +90,8 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
             })
             imagePoints.fromList(good.map { match -> queryKeypoints[match.queryIdx].pt })
 
-            val intrinsics = frame.camera.imageIntrinsics
-            val focal = intrinsics.focalLength
-            val principal = intrinsics.principalPoint
+            val focal = frame.focalLengthPixels
+            val principal = frame.principalPointPixels
             val cameraMatrix = Mat.eye(3, 3, CvType.CV_64F)
             cameraMatrix.put(0, 0, focal[0].toDouble())
             cameraMatrix.put(1, 1, focal[1].toDouble())
@@ -141,7 +130,7 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
                     matchedKeyframeId = "PNP_LANDMARK_MAP",
                     confidence = (inlierCount.toDouble() / good.size).coerceIn(0.0, 1.0),
                     inlierCount = inlierCount,
-                    timestampNs = imageTimestamp,
+                    timestampNs = frame.imageTimestampNs,
                 )
             } finally {
                 objectPoints.release()
@@ -153,7 +142,6 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
                 inliers.release()
             }
         } finally {
-            gray.release()
             keypointMat.release()
             queryDescriptors.release()
         }
@@ -210,18 +198,6 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
             q[2] = 0.25 * s
         }
         return q
-    }
-
-    private fun cameraGray(image: Image): Mat {
-        val plane = image.planes[0]
-        val buffer = plane.buffer.duplicate()
-        val pixels = ByteArray(image.width * image.height)
-        var target = 0
-        for (y in 0 until image.height) {
-            val row = y * plane.rowStride
-            for (x in 0 until image.width) pixels[target++] = buffer.get(row + x * plane.pixelStride)
-        }
-        return Mat(image.height, image.width, CvType.CV_8UC1).also { it.put(0, 0, pixels) }
     }
 
     companion object {
