@@ -42,6 +42,10 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
         if (preparedSessionId == map.sessionId) return
         landmarkDescriptors.release()
         val built = PersistentLandmarkBuilder().build(map)
+        latestStatus = PnpLocalizationStatus(
+            landmarks = built.landmarks.size,
+            message = "3D landmark map prepared",
+        )
         require(built.landmarks.size >= MIN_PNP_CORRESPONDENCES) {
             "Persistent map produced too few 3D landmarks: ${built.landmarks.size}"
         }
@@ -49,7 +53,6 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
         built.landmarks.forEachIndexed { index, landmark -> landmarkDescriptors.put(index, 0, landmark.descriptor) }
         landmarkMap = built
         preparedSessionId = map.sessionId
-        latestStatus = PnpLocalizationStatus(built.landmarks.size, message = "3D landmark map prepared")
     }
 
     override fun localize(map: PersistentMap, frame: Frame): LocalizationResult? {
