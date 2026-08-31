@@ -195,9 +195,17 @@ class MapCaptureActivity : Activity() {
     private fun startRelocalization() {
         val map = persistentMap ?: return
         try {
+            finalStatus = "Preparing ORB visual map (${map.keyframes.size} keyframes)…"
+            renderStatus()
+
+            // Native OpenCV setup and reference descriptor extraction happen before the
+            // ARCore render loop starts. This prevents the first GL frame from doing all
+            // map preparation and makes startup failures visible instead of killing the session.
+            val provider = OrbKeyframeLocalizationProvider().also { it.prepare(map) }
+            relocalizer = provider
+
             val newSession = createSession("Start relocalization") ?: return
             val view = createView(newSession)
-            val provider = OrbKeyframeLocalizationProvider()
             alignment = null
             worldCameraPose = null
             relocalizationMs = null
@@ -215,9 +223,10 @@ class MapCaptureActivity : Activity() {
                     worldCameraPose = currentAlignment.worldCameraPose(frame.camera.pose)
                 }
             }
-            relocalizer = provider
             attachSession(newSession, view)
             finalStatus = "Fresh-session geometric relocalization running. Look at the mapped furniture and surrounding room detail."
+        } catch (e: LinkageError) {
+            resetFailedSession("Relocalization native runtime failed", e)
         } catch (e: Exception) {
             resetFailedSession("Relocalization failed", e)
         }
@@ -255,7 +264,9 @@ class MapCaptureActivity : Activity() {
         handler.post(refresh)
     }
 
-    private fun resetFailedSession(prefix: String, error: Exception) {
+    private fun resetFailedSession(prefix: String, error: Throwable) {
+        arView?.setTrackedFrameConsumer(null)
+        arView?.let { root.removeView(it) }
         session?.close()
         session = null
         arView = null
@@ -327,6 +338,9 @@ class MapCaptureActivity : Activity() {
             if (tracking != null) {
                 appendLine("ARCore tracking frames: ${tracking.optLong("trackingFrames")}")
                 appendLine("Tracking failure: ${tracking.optString("trackingFailureReason")}")
+                tracking.opt("lastError")?.let { error ->
+                    if (error.toString() != "null") appendLine("Runtime error: $error")
+                }
             }
         }
     }
