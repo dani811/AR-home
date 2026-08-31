@@ -26,6 +26,7 @@ data class OrbMatchStatus(
     val inlierRatio: Double = 0.0,
     val stableHits: Int = 0,
     val referenceCount: Int = 0,
+    val evaluatedReferences: Int = 0,
     val message: String = "Waiting for camera image",
 )
 
@@ -35,6 +36,7 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
         val keyframe: PersistentKeyframe,
         val keypoints: List<KeyPoint>,
         val descriptors: Mat,
+        val fingerprint: VisualFingerprint,
     )
 
     private data class Candidate(
@@ -52,7 +54,7 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
     private var preparedSessionId: String? = null
     private var references = emptyList<Reference>()
     private var lastAttemptTimestampNs = 0L
-    private var candidatePose: Pose? = null
+    private var candidateReference: Reference? = null
     private var stableHits = 0
 
     @Volatile
@@ -90,12 +92,13 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
                 return null
             }
             val queryKeypoints = queryKeypointMat.toList()
-            val best = references.mapNotNull { reference ->
+            val shortlisted = shortlist(VisualFingerprint.fromGrayMat(frame.gray))
+            val best = shortlisted.mapNotNull { reference ->
                 evaluate(queryKeypoints, queryDescriptors, reference)
             }.maxWithOrNull(compareBy<Candidate> { it.inliers }.thenBy { it.goodMatches })
 
             if (best == null || best.goodMatches < MIN_GOOD_MATCHES || best.inliers < MIN_INLIERS || best.inlierRatio < MIN_INLIER_RATIO) {
-                resetCandidate("No geometrically consistent local match")
+                resetCandidate("No geometrically consistent local match", shortlisted.size)
                 if (best != null) {
                     latestStatus = latestStatus.copy(
                         bestKeyframeId = best.reference.keyframe.id,
@@ -103,16 +106,17 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
                         inliers = best.inliers,
                         inlierRatio = best.inlierRatio,
                         referenceCount = references.size,
+                        evaluatedReferences = shortlisted.size,
                     )
                 }
                 return null
             }
 
-            val coherent = candidatePose?.let {
-                poseDistanceMeters(it, best.reference.keyframe.pose) <= MAX_CANDIDATE_JUMP_METERS
+            val coherent = candidateReference?.let {
+                poseDistanceMeters(it.keyframe.pose, best.reference.keyframe.pose) <= MAX_CANDIDATE_JUMP_METERS
             } ?: true
             stableHits = if (coherent) stableHits + 1 else 1
-            candidatePose = best.reference.keyframe.pose
+            candidateReference = best.reference
             latestStatus = OrbMatchStatus(
                 bestKeyframeId = best.reference.keyframe.id,
                 goodMatches = best.goodMatches,
@@ -120,6 +124,7 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
                 inlierRatio = best.inlierRatio,
                 stableHits = stableHits,
                 referenceCount = references.size,
+                evaluatedReferences = shortlisted.size,
                 message = if (stableHits >= REQUIRED_STABLE_HITS) {
                     "Geometric keyframe localization accepted"
                 } else {
@@ -159,7 +164,7 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
                 descriptors.release()
                 null
             } else {
-                Reference(keyframe, keypointMat.toList(), descriptors)
+                Reference(keyframe, keypointMat.toList(), descriptors, VisualFingerprint.fromGrayMat(gray))
             }
         } finally {
             gray.release()
@@ -203,10 +208,20 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
         }
     }
 
-    private fun resetCandidate(message: String) {
-        candidatePose = null
+    private fun shortlist(query: VisualFingerprint): List<Reference> {
+        val scores = references.map { query.correlation(it.fingerprint) }
+        val retained = candidateReference?.let { candidate -> references.indexOfFirst { it === candidate } }
+        return selectReferenceIndices(scores, MAX_EVALUATED_REFERENCES, retained).map(references::get)
+    }
+
+    private fun resetCandidate(message: String, evaluatedReferences: Int = 0) {
+        candidateReference = null
         stableHits = 0
-        latestStatus = OrbMatchStatus(referenceCount = references.size, message = message)
+        latestStatus = OrbMatchStatus(
+            referenceCount = references.size,
+            evaluatedReferences = evaluatedReferences,
+            message = message,
+        )
     }
 
     private fun poseDistanceMeters(first: Pose, second: Pose): Float {
@@ -235,5 +250,16 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
         private const val RANSAC_REPROJECTION_ERROR = 4.0
         private const val MAX_CANDIDATE_JUMP_METERS = 1.0f
         private const val REQUIRED_STABLE_HITS = 3
+        private const val MAX_EVALUATED_REFERENCES = 6
     }
+}
+
+internal fun selectReferenceIndices(scores: List<Float>, limit: Int, retainedIndex: Int?): List<Int> {
+    require(limit > 0) { "limit must be positive" }
+    if (scores.isEmpty()) return emptyList()
+    val selected = scores.indices.sortedByDescending(scores::get).take(limit).toMutableList()
+    if (retainedIndex != null && retainedIndex in scores.indices && retainedIndex !in selected) {
+        selected[selected.lastIndex] = retainedIndex
+    }
+    return selected
 }

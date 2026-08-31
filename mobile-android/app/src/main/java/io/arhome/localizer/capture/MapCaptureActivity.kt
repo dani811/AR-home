@@ -439,7 +439,7 @@ class MapCaptureActivity : Activity() {
                 appendLine("ORB fallback: ${match.message}")
                 appendLine("Best keyframe: ${match.bestKeyframeId ?: "—"}")
                 appendLine("ORB good matches: ${match.goodMatches} · RANSAC inliers: ${match.inliers} · ratio: %.2f".format(match.inlierRatio))
-                appendLine("Stable hits: ${match.stableHits} · references: ${match.referenceCount}")
+                appendLine("Stable hits: ${match.stableHits} · evaluated references: ${match.evaluatedReferences}/${match.referenceCount}")
             }
             alignment?.let { accepted ->
                 appendLine("POSE ACCEPTED FROM: ${acceptedPoseSource ?: "unknown"}")
