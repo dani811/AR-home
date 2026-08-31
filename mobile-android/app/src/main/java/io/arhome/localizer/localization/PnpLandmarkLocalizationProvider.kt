@@ -11,6 +11,7 @@ import org.opencv.calib3d.Calib3d
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.MatOfDMatch
+import org.opencv.core.MatOfDouble
 import org.opencv.core.MatOfKeyPoint
 import org.opencv.core.MatOfPoint2f
 import org.opencv.core.MatOfPoint3f
@@ -104,7 +105,7 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
             cameraMatrix.put(1, 1, focal[1].toDouble())
             cameraMatrix.put(0, 2, principal[0].toDouble())
             cameraMatrix.put(1, 2, principal[1].toDouble())
-            val distortion = Mat()
+            val distortion = MatOfDouble()
             val rvec = Mat()
             val tvec = Mat()
             val inliers = Mat()
