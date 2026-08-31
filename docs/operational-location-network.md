@@ -6,64 +6,43 @@ Issue: #50
 
 ## 1. Purpose
 
-The commercial evolution of AR Home requires more than multiple users sharing one inventory. A freelancer or small company operates across a network of physical places: warehouse, van, workshop, customer site, temporary job site and nested storage areas inside each one.
+The commercial evolution of AR Home requires more than multiple users sharing one inventory. A freelancer or small company operates across warehouses, vans, workshops, customer sites and temporary jobs.
 
 The product must model those places as connected operational locations and preserve inventory movement between them.
-
-Example:
 
 ```text
 Instalaciones Pepito S.L.
 ├── Almacén Pepito
-│   └── Rack electricidad
 ├── Furgoneta Juanito
 ├── Furgoneta Pepito
 ├── Obra Calle Sagasta 24
 └── Reforma Av. del Puerto
 ```
 
-The core question becomes not only “where is this object?” but also:
+The system should answer not only where an object is, but which location holds it, who is responsible, how it arrived there and what must return or be replenished.
 
-- which operational location owns the current stock;
-- who is responsible for it;
-- how it moved there;
-- what must be returned or replenished;
-- whether that location has a spatial map for guided retrieval.
+## 2. Modeling rule
 
-## 2. Core modeling rule
+Users, logistics locations and spatial maps are separate concepts.
 
-Users, inventory locations and spatial maps are separate concepts.
-
-A van is a location even when its habitual technician changes. A job site is a location even when no user is currently assigned. A location may exist without an AR map and gain one later.
-
-Conceptually:
+A van remains a location when its driver changes. A job site remains a location when nobody is assigned. A location may work without AR and gain a spatial map later.
 
 ```text
-Organization / Workspace
-        |
-        +-- Users
-        |
-        +-- LocationNodes
-               |
-               +-- Inventory balances / units
-               +-- Movements
-               +-- optional SpatialMap linkage
+Workspace
+├── Users
+└── LocationNodes
+    ├── inventory
+    ├── movements
+    └── optional spatial link
 ```
 
-## 3. Organization / workspace boundary
+## 3. Workspace boundary
 
-Commercial collaboration eventually needs a boundary that groups:
+Commercial collaboration eventually needs a boundary grouping users, locations, shared inventory, movements, permissions and audit history.
 
-- users;
-- locations;
-- shared catalog/inventory;
-- movements;
-- permissions;
-- audit history.
+Working name: `Workspace` or `Organization`.
 
-The first logistics implementation does not need to deliver full multi-tenant SaaS, but identifiers and persistence must not make that future impossible.
-
-Working name: `Workspace` or `Organization`. Exact naming can be decided with the authorization slice.
+The first logistics slice need not implement multi-tenant SaaS, but persistence must not block that future.
 
 ## 4. LocationNode
 
@@ -86,131 +65,100 @@ Initial types:
 
 Anticipated fields:
 
-- `id`: UUID;
-- workspace/organization reference;
-- `parentLocationId` optional;
+- `id` UUID;
+- workspace reference;
+- optional `parentLocationId`;
 - `name`;
 - `type`;
 - `status`: `ACTIVE | INACTIVE | CLOSED`;
-- `activeFrom` optional;
-- `activeUntil` optional;
-- optional address/description metadata in a later slice;
+- optional `activeFrom` / `activeUntil`;
 - optional spatial-link reference;
 - timestamps.
 
-Location types should be data-compatible with new categories later; avoid coupling core logic to a fixed household-only hierarchy.
-
-## 5. Hierarchy examples
-
-A household can still be represented:
+The hierarchy must support both:
 
 ```text
-Casa
-└── Dormitorio
-    └── Cajonera
-        └── Cajón 2
+Casa > Dormitorio > Cajonera > Cajón 2
 ```
 
-A business can use the same logistics abstraction:
+and:
 
 ```text
-Almacén Pepito
-└── Zona electricidad
-    └── Rack A
-        └── Balda 3
-            └── Caja 4
+Almacén > Zona electricidad > Rack A > Balda 3 > Caja 4
 ```
 
-A vehicle is also a location tree:
+Detailed furniture geometry remains in the spatial module. `LocationNode` is the operational representation.
 
-```text
-Furgoneta Juanito
-└── Módulo izquierdo
-    ├── Cajón 1
-    └── Cajón 2
-```
+## 5. Users and assignments
 
-Detailed furniture geometry remains a concern of the spatial module. `LocationNode` is the operational/logistics representation and may link to richer spatial entities where available.
-
-## 6. Users and assignments
-
-A user can be assigned responsibility or access to locations without being the location itself.
-
-Examples:
+A user may be assigned responsibility or access to a location without becoming that location.
 
 ```text
 Juanito -> primary technician -> Furgoneta Juanito
 Juanito -> assigned -> Obra Sagasta
-María   -> admin -> all locations
 Pedro   -> temporary driver -> Furgoneta Juanito
+María   -> admin -> all locations
 ```
 
-Changing the assigned person must not move the van inventory.
+Changing the assigned person must not move vehicle inventory.
 
-The initial location specification does not hard-code a complete role model. Authorization receives its own slice.
+Authorization receives its own later slice.
 
-## 7. Inventory per location
+## 6. Inventory per location
 
-The system must answer both global and per-location quantities.
-
-Example:
+The system must answer global and per-location stock.
 
 ```text
 Cable 2.5 mm²
-
 Almacén Pepito       430 m
 Furgoneta Juanito     85 m
 Furgoneta Pepito      42 m
 Obra Sagasta          26 m
---------------------------
 TOTAL                 583 m
 ```
 
-For serialized inventory, one active unit has one current operational location/custody state at a time, while retaining its expected/home storage location where useful.
+For serialized inventory, one active unit has one current operational location/custody state while retaining its expected/home location where useful.
 
 For bulk inventory, balances are eventually derived or materialized from movement history.
 
-## 8. Movement ledger
+## 7. Movement ledger
 
-Locations are connected by inventory movements.
+Locations are connected by append-oriented inventory movements.
 
-Initial movement semantics:
+Initial semantics:
 
 - `RECEIPT`: stock enters the network;
 - `TRANSFER`: stock moves between locations;
 - `ISSUE`: stock is consumed or leaves operational custody;
-- `RETURN`: stock returns from use/job/custody;
+- `RETURN`: stock returns;
 - `ADJUSTMENT`: audited correction.
 
-Example:
-
 ```text
-08:00  Almacén -> Furgoneta Juanito      100 m cable
-09:12  Furgoneta -> Obra Sagasta          40 m
-13:46  ISSUE at Obra Sagasta              28 m
-17:51  Obra Sagasta -> Furgoneta          12 m
+08:00 Almacén -> Furgoneta Juanito     100 m
+09:12 Furgoneta -> Obra Sagasta         40 m
+13:46 ISSUE at Obra Sagasta              28 m
+17:51 Obra Sagasta -> Furgoneta          12 m
 ```
 
-Movement history should be append-oriented and auditable. Current quantities must not be represented as unrelated mutable flags with no history.
+Current quantities must not become unrelated mutable flags with no history.
 
-A later design will determine transaction boundaries, materialized balances and in-transit state.
+Transaction boundaries, balance materialization and in-transit stock are separate implementation decisions.
 
-## 9. Temporary job sites
+## 8. Temporary job sites
 
-`JOB_SITE` is a first-class temporary location.
+`JOB_SITE` is a first-class temporary operational location.
 
-It may have:
+It can hold:
 
-- activation/start date;
 - responsible users;
 - material sent;
-- serialized tools present;
+- serialized tools;
 - consumed material;
 - remaining stock;
 - optional spatial map;
-- close date/status.
+- lifecycle dates/status.
 
-Closing a job site requires reconciliation of tracked inventory:
+Closing a job site requires explicit reconciliation:
 
 ```text
 remaining stock
@@ -223,51 +171,37 @@ remaining stock
 
 History remains queryable after `CLOSED`.
 
-## 10. Commercial workflows enabled
+## 9. Commercial workflows
 
 ### Prepare vehicle
 
-Given planned work and required inventory, compare requirements with vehicle stock.
-
-Example:
+Compare tomorrow's required inventory with the vehicle's current stock and produce a warehouse picking/load list.
 
 ```text
-Tomorrow: electrical panel installation
-
-Taladro              OK
-Multímetro           OK
-Cable 2.5 mm²        12 / 30 m  -> need 18
-Diferencial          missing
-C16                   12 / 8     -> OK
-Tacos                  5 / 20    -> need 15
+Taladro             OK
+Multímetro          OK
+Cable 2.5 mm²       12 / 30 m -> need 18
+Diferencial         missing
+C16                  12 / 8   -> OK
+Tacos                 5 / 20  -> need 15
 ```
-
-The product can generate a warehouse picking/load list.
 
 ### Job-site reconciliation
 
-Answer:
-
-- what was sent;
-- what remains;
-- what was consumed;
-- what must be returned;
-- which serialized tools are still present.
+Answer what was sent, remains, was consumed, must return and which serialized tools are still present.
 
 ### Asset custody
-
-For a physical unit:
 
 ```text
 Bosch GSB #003
 Current location: Obra Sagasta
-Responsible user: Juanito
-Home location: Almacén > Armario herramientas > Balda 2
+Responsible: Juanito
+Home: Almacén > Armario herramientas > Balda 2
 ```
 
 ### Cross-location search
 
-The application should eventually answer natural questions such as:
+The product should eventually answer:
 
 - Where is the multimeter?
 - What stock is in Juanito's van?
@@ -275,11 +209,11 @@ The application should eventually answer natural questions such as:
 - Which tools have not returned?
 - What needs loading tomorrow?
 
-## 11. Spatial integration
+## 10. Spatial integration
 
-Spatial mapping is optional per operational location.
+Spatial mapping is optional per location.
 
-A warehouse, van, workshop or job site may later link to a persistent spatial map and support:
+A warehouse, van, workshop or job site may later support:
 
 - AR-guided find;
 - guided picking;
@@ -288,15 +222,13 @@ A warehouse, van, workshop or job site may later link to a persistent spatial ma
 - cycle-count assistance;
 - storage-zone overlays.
 
-The logistics core remains functional when no spatial map exists.
+The logistics core remains functional without a spatial map.
 
-Barcodes and QR codes may support identity and workflow but never become required anchors for markerless relocalization.
+Barcodes and QR codes may support identity/workflow but never become required anchors for markerless relocalization.
 
-## 12. Commercial packaging direction
+## 11. Commercial packaging direction
 
-This network capability is a likely monetization boundary.
-
-Directional packaging:
+This capability is a likely monetization boundary.
 
 ```text
 PERSONAL
@@ -307,10 +239,8 @@ freelancer
 warehouse + vehicle + active jobs
 
 TEAM / SMB
-multiple users
-multiple vehicles/job sites
-permissions
-movements/audit
+multiple users, vehicles and job sites
+permissions, movements, audit
 shared operational maps
 
 BUSINESS
@@ -319,39 +249,39 @@ API/integrations
 advanced controls/reporting
 ```
 
-Pricing should reflect collaboration, operational scale and workflow value rather than preventing customers from owning or exporting their inventory data.
+Pricing should reflect collaboration, operational scale and workflow value, not customer data ownership or export restrictions.
 
-## 13. Architecture guardrails
+## 12. Architecture guardrails
 
 - inventory does not depend on ARCore;
-- `LocationNode` is logistics structure, not a replacement for spatial geometry;
+- `LocationNode` is logistics structure, not spatial geometry;
 - users and locations remain distinct;
 - spatial containment and inventory relations remain separate graphs;
-- item identity remains independent from physical location;
+- item identity remains independent from location;
 - movement history is append-oriented;
-- household terminology must not leak into universal inventory/logistics APIs;
-- authorization, invoicing and workforce scheduling are separate concerns.
+- household terminology must not leak into universal APIs;
+- authorization, invoicing and workforce scheduling remain separate concerns.
 
-## 14. Acceptance examples
+## 13. Acceptance examples
 
-The model must eventually support all of these without special-case household logic:
+The model must eventually support:
 
-1. One company has one warehouse, two vans and two active job sites.
-2. Juanito is assigned to a van; Pedro uses it tomorrow without moving its inventory.
-3. 100 m of cable travels warehouse -> van -> job site with partial consumption and return.
-4. A serialized multimeter is currently at a job site while its home location remains a warehouse cabinet.
-5. A closed job site retains complete historical movements.
-6. Remaining tracked inventory must be explicitly reconciled when a job site closes.
-7. Global stock can be aggregated across active locations.
-8. A location works before spatial mapping and can gain an AR map later.
+1. One company with one warehouse, two vans and two active job sites.
+2. Juanito assigned to a van and Pedro using it tomorrow without moving its stock.
+3. Cable moving warehouse -> van -> job site with partial consumption and return.
+4. A serialized multimeter at a job site while its home remains a warehouse cabinet.
+5. A closed job site retaining complete movement history.
+6. Remaining tracked inventory explicitly reconciled on close.
+7. Global stock aggregated across locations.
+8. A location gaining an AR map later without changing inventory identity.
 
-## 15. Non-goals for the first implementation slices
+## 14. Non-goals for first slices
 
 Do not implement yet:
 
-- accounting or invoicing;
+- accounting/invoicing;
 - ERP replacement;
-- customer CRM;
+- CRM;
 - GPS fleet tracking;
 - workforce scheduling;
 - route optimization;
@@ -359,6 +289,6 @@ Do not implement yet:
 - automatic replenishment;
 - shipping/carrier workflows.
 
-The near-term implementation should first establish generic locations and movement semantics, then collaboration and commercial workflows can build on that foundation.
+Near-term implementation should establish generic locations and movement semantics first. Collaboration and commercial workflows build on that foundation.
 
 Refs: #50, #48, #40, #20.
