@@ -47,7 +47,10 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
         val inlierRatio: Double,
     )
 
-    private val orb = ORB.create(1800)
+    // OpenCV must be loaded before the first JNI-backed object is constructed.
+    // Kotlin evaluates property initializers before later init blocks, so loading in
+    // an init block after ORB.create() leaves the native symbols unavailable.
+    private val orb = loadOpenCvAndCreateOrb()
     private val matcher = DescriptorMatcher.create(DescriptorMatcher.BRUTEFORCE_HAMMING)
     private var preparedSessionId: String? = null
     private var references = emptyList<Reference>()
@@ -58,10 +61,6 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
     @Volatile
     var latestStatus = OrbMatchStatus()
         private set
-
-    init {
-        check(OpenCVLoader.initDebug()) { "OpenCV native runtime failed to initialize" }
-    }
 
     /**
      * Builds ORB descriptors for the persistent map before ARCore enters its frame loop.
@@ -246,6 +245,11 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
     }
 
     companion object {
+        private fun loadOpenCvAndCreateOrb(): ORB {
+            check(OpenCVLoader.initDebug()) { "OpenCV native runtime failed to initialize" }
+            return ORB.create(1800)
+        }
+
         private const val MIN_ATTEMPT_INTERVAL_NS = 450_000_000L
         private const val MIN_QUERY_FEATURES = 100
         private const val MIN_REFERENCE_FEATURES = 100
