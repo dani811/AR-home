@@ -4,6 +4,9 @@ import android.graphics.BitmapFactory
 import android.media.Image
 import java.io.File
 import kotlin.math.sqrt
+import org.opencv.core.Mat
+import org.opencv.core.Size
+import org.opencv.imgproc.Imgproc
 
 data class VisualFingerprint(
     val values: FloatArray,
@@ -58,6 +61,18 @@ data class VisualFingerprint(
                 }
             }
             return normalize(samples)
+        }
+
+        fun fromGrayMat(gray: Mat): VisualFingerprint {
+            val resized = Mat()
+            return try {
+                Imgproc.resize(gray, resized, Size(WIDTH.toDouble(), HEIGHT.toDouble()), 0.0, 0.0, Imgproc.INTER_AREA)
+                val pixels = ByteArray(SAMPLE_COUNT)
+                resized.get(0, 0, pixels)
+                normalize(FloatArray(SAMPLE_COUNT) { index -> (pixels[index].toInt() and 0xff).toFloat() })
+            } finally {
+                resized.release()
+            }
         }
 
         internal fun normalize(samples: FloatArray): VisualFingerprint {
