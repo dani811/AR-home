@@ -23,6 +23,7 @@ import com.google.ar.core.Pose
 import com.google.ar.core.Session
 import io.arhome.capabilities.ActiveArCoreProbeView
 import io.arhome.localizer.localization.OrbKeyframeLocalizationProvider
+import io.arhome.localizer.localization.PnpLandmarkLocalizationProvider
 import io.arhome.localizer.localization.WorldAlignment
 import io.arhome.localizer.map.PersistentMap
 import io.arhome.localizer.map.PersistentMapStore
@@ -38,7 +39,11 @@ class MapCaptureActivity : Activity() {
     private var arView: ActiveArCoreProbeView? = null
     private var capture: MapCaptureSession? = null
     private var persistentMap: PersistentMap? = null
-    private var relocalizer: OrbKeyframeLocalizationProvider? = null
+    private var orbRelocalizer: OrbKeyframeLocalizationProvider? = null
+    private var pnpRelocalizer: PnpLandmarkLocalizationProvider? = null
+    @Volatile private var pnpEnabled = false
+    @Volatile private var pnpDisabledReason: String? = null
+    @Volatile private var acceptedPoseSource: String? = null
     @Volatile private var alignment: WorldAlignment? = null
     @Volatile private var worldCameraPose: Pose? = null
     @Volatile private var relocalizationMs: Long? = null
@@ -195,28 +200,52 @@ class MapCaptureActivity : Activity() {
     private fun startRelocalization() {
         val map = persistentMap ?: return
         try {
-            finalStatus = "Preparing ORB visual map (${map.keyframes.size} keyframes)…"
+            finalStatus = "Preparing PnP landmarks and ORB fallback (${map.keyframes.size} keyframes)…"
             renderStatus()
 
-            // Native OpenCV setup and reference descriptor extraction happen before the
-            // ARCore render loop starts. This prevents the first GL frame from doing all
-            // map preparation and makes startup failures visible instead of killing the session.
-            val provider = OrbKeyframeLocalizationProvider().also { it.prepare(map) }
-            relocalizer = provider
+            // Both providers prewarm before ARCore starts so the render loop never pays
+            // the native OpenCV and reference-map preparation cost on its first frame.
+            val pnpProvider = PnpLandmarkLocalizationProvider()
+            pnpRelocalizer = pnpProvider
+            pnpEnabled = try {
+                pnpProvider.prepare(map)
+                pnpDisabledReason = null
+                true
+            } catch (e: Exception) {
+                pnpDisabledReason = "PnP unavailable: ${e.message}"
+                false
+            }
+            val orbProvider = OrbKeyframeLocalizationProvider().also { it.prepare(map) }
+            orbRelocalizer = orbProvider
 
             val newSession = createSession("Start relocalization") ?: return
             val view = createView(newSession)
             alignment = null
             worldCameraPose = null
             relocalizationMs = null
+            acceptedPoseSource = null
             relocalizationStartedNs = SystemClock.elapsedRealtimeNanos()
             view.setTrackedFrameConsumer { frame ->
                 val currentAlignment = alignment
                 if (currentAlignment == null) {
-                    provider.localize(map, frame)?.let { result ->
+                    val pnpResult = if (pnpEnabled) {
+                        try {
+                            pnpProvider.localize(map, frame)
+                        } catch (e: Exception) {
+                            pnpEnabled = false
+                            pnpDisabledReason = "PnP disabled after runtime error: ${e.message}"
+                            null
+                        }
+                    } else {
+                        null
+                    }
+                    val sourceAndResult = pnpResult?.let { "PnP" to it }
+                        ?: orbProvider.localize(map, frame)?.let { "ORB/homography fallback" to it }
+                    sourceAndResult?.let { (source, result) ->
                         val created = WorldAlignment.fromLocalization(result, frame.camera.pose)
                         alignment = created
                         worldCameraPose = created.worldCameraPose(frame.camera.pose)
+                        acceptedPoseSource = source
                         relocalizationMs = (SystemClock.elapsedRealtimeNanos() - relocalizationStartedNs) / 1_000_000L
                     }
                 } else {
@@ -271,7 +300,11 @@ class MapCaptureActivity : Activity() {
         session = null
         arView = null
         capture = null
-        relocalizer = null
+        orbRelocalizer = null
+        pnpRelocalizer = null
+        pnpEnabled = false
+        pnpDisabledReason = null
+        acceptedPoseSource = null
         finalStatus = "$prefix: ${error.javaClass.simpleName}: ${error.message}"
         renderStatus()
     }
@@ -322,18 +355,24 @@ class MapCaptureActivity : Activity() {
         status.text = buildString {
             appendLine(finalStatus)
             if (mapCapture != null) appendLine("Keyframes: ${mapCapture.keyframeCount}")
-            relocalizer?.latestStatus?.let { match ->
-                appendLine("Matcher: ${match.message}")
+            pnpRelocalizer?.latestStatus?.let { match ->
+                appendLine("PnP: ${match.message}")
+                appendLine("Landmarks: ${match.landmarks} · good matches: ${match.goodMatches} · PnP inliers: ${match.pnpInliers}")
+            }
+            pnpDisabledReason?.let { appendLine(it) }
+            orbRelocalizer?.latestStatus?.let { match ->
+                appendLine("ORB fallback: ${match.message}")
                 appendLine("Best keyframe: ${match.bestKeyframeId ?: "—"}")
                 appendLine("ORB good matches: ${match.goodMatches} · RANSAC inliers: ${match.inliers} · ratio: %.2f".format(match.inlierRatio))
                 appendLine("Stable hits: ${match.stableHits} · references: ${match.referenceCount}")
             }
             alignment?.let { accepted ->
+                appendLine("POSE ACCEPTED FROM: ${acceptedPoseSource ?: "unknown"}")
                 appendLine("RELOCALIZED · keyframe ${accepted.source.matchedKeyframeId} · confidence %.3f · ${relocalizationMs ?: 0} ms".format(accepted.source.confidence))
                 worldCameraPose?.translation?.let { xyz ->
                     appendLine("World camera xyz: %.2f, %.2f, %.2f m".format(xyz[0], xyz[1], xyz[2]))
                 }
-                appendLine("Geometric inliers: ${accepted.source.inlierCount} (ORB + homography RANSAC; 2D→3D PnP is next)")
+                appendLine("Accepted-pose inliers: ${accepted.source.inlierCount}")
             }
             if (tracking != null) {
                 appendLine("ARCore tracking frames: ${tracking.optLong("trackingFrames")}")
