@@ -18,7 +18,6 @@ import org.opencv.core.Mat
 import org.opencv.core.MatOfDMatch
 import org.opencv.core.MatOfKeyPoint
 import org.opencv.core.MatOfPoint2f
-import org.opencv.core.Point
 import org.opencv.features2d.DescriptorMatcher
 import org.opencv.features2d.ORB
 import org.opencv.imgcodecs.Imgcodecs
@@ -62,6 +61,20 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
 
     init {
         check(OpenCVLoader.initDebug()) { "OpenCV native runtime failed to initialize" }
+    }
+
+    /**
+     * Builds ORB descriptors for the persistent map before ARCore enters its frame loop.
+     * Keeping this work out of GLSurfaceView.onDrawFrame avoids a long native OpenCV burst
+     * on the render thread during the first tracked frame.
+     */
+    fun prepare(map: PersistentMap) {
+        if (preparedSessionId == map.sessionId) return
+        references.forEach { it.descriptors.release() }
+        references = map.keyframes.mapNotNull { keyframe -> prepareReference(keyframe) }
+        require(references.size >= REQUIRED_STABLE_HITS) { "Persistent map has too few ORB-ready keyframes" }
+        preparedSessionId = map.sessionId
+        latestStatus = OrbMatchStatus(referenceCount = references.size, message = "ORB visual map prepared")
     }
 
     override fun localize(map: PersistentMap, frame: Frame): LocalizationResult? {
@@ -143,15 +156,6 @@ class OrbKeyframeLocalizationProvider : LocalizationProvider {
             queryKeypointMat.release()
             queryDescriptors.release()
         }
-    }
-
-    private fun prepare(map: PersistentMap) {
-        if (preparedSessionId == map.sessionId) return
-        references.forEach { it.descriptors.release() }
-        references = map.keyframes.mapNotNull { keyframe -> prepareReference(keyframe) }
-        require(references.size >= REQUIRED_STABLE_HITS) { "Persistent map has too few ORB-ready keyframes" }
-        preparedSessionId = map.sessionId
-        latestStatus = OrbMatchStatus(referenceCount = references.size, message = "ORB visual map prepared")
     }
 
     private fun prepareReference(keyframe: PersistentKeyframe): Reference? {
