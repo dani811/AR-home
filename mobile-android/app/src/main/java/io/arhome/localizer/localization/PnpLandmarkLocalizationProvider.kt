@@ -6,6 +6,7 @@ import com.google.ar.core.Pose
 import com.google.ar.core.exceptions.NotYetAvailableException
 import io.arhome.localizer.map.PersistentMap
 import kotlin.math.sqrt
+import org.opencv.android.OpenCVLoader
 import org.opencv.calib3d.Calib3d
 import org.opencv.core.CvType
 import org.opencv.core.Mat
@@ -25,7 +26,7 @@ data class PnpLocalizationStatus(
 )
 
 class PnpLandmarkLocalizationProvider : LocalizationProvider {
-    private val orb: ORB = ORB.create(1800)
+    private val orb: ORB = createOrb()
     private val matcher = DescriptorMatcher.create(DescriptorMatcher.BRUTEFORCE_HAMMING)
     private var preparedSessionId: String? = null
     private var landmarkMap: PersistentLandmarkMap? = null
@@ -103,6 +104,7 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
             cameraMatrix.put(1, 1, focal[1].toDouble())
             cameraMatrix.put(0, 2, principal[0].toDouble())
             cameraMatrix.put(1, 2, principal[1].toDouble())
+            val distortion = Mat()
             val rvec = Mat()
             val tvec = Mat()
             val inliers = Mat()
@@ -111,7 +113,7 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
                     objectPoints,
                     imagePoints,
                     cameraMatrix,
-                    Mat(),
+                    distortion,
                     rvec,
                     tvec,
                     false,
@@ -141,6 +143,7 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
                 objectPoints.release()
                 imagePoints.release()
                 cameraMatrix.release()
+                distortion.release()
                 rvec.release()
                 tvec.release()
                 inliers.release()
@@ -156,8 +159,10 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
         val rCw = Mat()
         try {
             Calib3d.Rodrigues(rvec, rCw)
-            val s = doubleArrayOf(1.0, -1.0, -1.0)
-            val rWc = Array(3) { row -> DoubleArray(3) { col -> rCw.get(col, row)[0] * s[col] } }
+            val cameraAxisFlip = doubleArrayOf(1.0, -1.0, -1.0)
+            val rWc = Array(3) { row ->
+                DoubleArray(3) { col -> rCw.get(col, row)[0] * cameraAxisFlip[col] }
+            }
             val t = DoubleArray(3) { row -> tvec.get(row, 0)[0] }
             val center = DoubleArray(3) { row ->
                 -(rCw.get(0, row)[0] * t[0] + rCw.get(1, row)[0] * t[1] + rCw.get(2, row)[0] * t[2])
@@ -216,6 +221,11 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
     }
 
     companion object {
+        private fun createOrb(): ORB {
+            check(OpenCVLoader.initDebug()) { "OpenCV native runtime failed to initialize" }
+            return ORB.create(1800)
+        }
+
         private const val MIN_ATTEMPT_INTERVAL_NS = 450_000_000L
         private const val MIN_PNP_CORRESPONDENCES = 24
         private const val MIN_PNP_INLIERS = 18
