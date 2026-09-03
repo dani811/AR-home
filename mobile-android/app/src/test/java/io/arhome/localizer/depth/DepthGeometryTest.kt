@@ -13,7 +13,8 @@ class DepthGeometryTest {
     }
     @Test fun alignmentRespectsCropRotationAndRejectsOutside() {
         val transform = floatArrayOf(0f, 1f/480, 0f, -1f/640, 0f, 1f)
-        assertEquals(2 * 8 + 2, DepthGeometry.depthPixel(320.0, 120.0, transform, 8, 4))
+        // Use the interior of a depth pixel; float calibration rounds exact cell boundaries.
+        assertEquals(2 * 8 + 2, DepthGeometry.depthPixel(280.0, 150.0, transform, 8, 4))
         assertNull(DepthGeometry.depthPixel(-10.0, 120.0, transform, 8, 4))
         assertNull(DepthGeometry.depthPixel(320.0, 480.0, transform, 8, 4))
     }
