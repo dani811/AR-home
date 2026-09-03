@@ -57,9 +57,47 @@ Build checks do not replace these device checks. The earlier Python replay of ma
 
 CI currently builds with `-PisolatedInstall=true`. This keeps the validation
 implementation but installs debug builds as `io.arhome.capabilities.validation`,
-labelled **AR Home Validacion**, alongside the existing app. Its maps and reports
-are separate; import the map ZIP in this app. Without the property the original
+labelled **AR Home Localizer**, using the same package as the previously distributed validation build.
+This release replaces that build; it does not introduce another parallel app.
+Create a new scan to obtain depth data. Without the property the original
 application ID and label are retained. This is a diagnostic for installation
 conflicts, not a repair of signing continuity. CI still needs a securely persisted
 signing key before these builds can reliably update one another. No private key
 is committed to the repository. Device installation remains a manual gate.
+
+### Depth capture and reconstruction (schema 2)
+
+The depth scan build enables autofocus and checks Depth support at runtime. On
+supported sessions every saved RGB frame is accompanied by a fresh raw depth
+image (unsigned millimeters, little endian) and confidence bytes. The manifest
+records all timestamps and the per-frame affine mapping from CPU image pixels
+to depth UVs; it does not assume that RGB and depth have equal aspect ratios.
+Reprojected old depth frames are skipped. Missing depth produces an explicit
+waiting state. Unsupported devices retain RGB capture and declare that source.
+
+Each captured camera pose has a local ARCore anchor. The exported poses are
+snapshotted together during one tracked frame, relative to the first anchor.
+Anchors are detached on completion/destruction; capture is bounded at 80 views.
+The snapshot is an ARCore estimate, not physical ground truth or cross-session
+persistence. No cloud anchors, service calls or QR markers are involved.
+
+Raw-depth maps build ORB landmarks by backprojecting reliable measurements.
+The initial, provisional policy requires confidence >=192/255, optical depth
+0.2–8 m and five consistent samples in a 3x3 neighborhood. Mixed-depth edges
+are rejected at max(50 mm, 5% of depth). One depth pixel contributes at most
+one feature per frame; a round-robin cap preserves representation of all views.
+These are engineering gates to validate on device, not calibrated accuracy
+guarantees. PnP uses unique target rows for these maps and the original pose
+acceptance thresholds. No RGB triangulation is silently substituted if a depth
+map produces insufficient reliable points.
+
+The held-out validation reconstructs from training frames only and reports
+landmarkSource, depthFrameCount and poseReferenceIsGroundTruth=false. Legacy
+schema-1 ZIPs still load and retain their RGB pipeline; this change cannot add
+missing depth measurements to existing captures.
+
+Validation: unit coverage for padded image-plane decoding, unsigned 16-bit
+values, crop/rotation alignment, camera-axis convention, missing measurements,
+confidence filtering and depth discontinuities. Real-device depth availability,
+performance, precision and recovery still need validation; a complete overlay
+and adaptive direction planner are not part of this build.

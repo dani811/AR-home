@@ -12,6 +12,16 @@ data class PersistentKeyframe(
     val focalLengthPixels: FloatArray,
     val principalPointPixels: FloatArray,
     val imageDimensionsPixels: IntArray,
+    val depth: PersistentDepth? = null,
+)
+
+data class PersistentDepth(
+    val image: File,
+    val confidence: File,
+    val width: Int,
+    val height: Int,
+    val timestampNs: Long,
+    val imageToDepthUv: FloatArray,
 )
 
 data class PersistentMap(
@@ -20,12 +30,14 @@ data class PersistentMap(
     val coordinateFrame: String,
     val root: File,
     val keyframes: List<PersistentKeyframe>,
+    val landmarkSource: String = "TRIANGULATED_RGB",
 ) {
     init {
-        require(coordinateFrame == "ARCORE_SESSION_LOCAL") {
+        require(coordinateFrame == "ARCORE_SESSION_LOCAL" || coordinateFrame == "ARCORE_ANCHOR_SNAPSHOT") {
             "Unsupported coordinate frame: $coordinateFrame"
         }
         require(keyframes.isNotEmpty()) { "Persistent map contains no keyframes" }
+        require(landmarkSource in setOf("TRIANGULATED_RGB", "RAW_DEPTH")) { "Unsupported landmark source: $landmarkSource" }
     }
 }
 

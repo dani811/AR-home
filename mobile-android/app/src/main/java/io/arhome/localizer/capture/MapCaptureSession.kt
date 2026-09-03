@@ -5,10 +5,15 @@ import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.media.Image
+import com.google.ar.core.Anchor
+import com.google.ar.core.Config
 import com.google.ar.core.Frame
 import com.google.ar.core.Pose
+import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.NotYetAvailableException
+import com.google.ar.core.exceptions.ResourceExhaustedException
+import io.arhome.localizer.depth.RawDepthCapture
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -21,7 +26,7 @@ import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.sqrt
 
-class MapCaptureSession(context: Context) {
+class MapCaptureSession(context: Context, private val session: Session) : AutoCloseable {
 
     data class Result(
         val sessionId: String,
@@ -35,12 +40,25 @@ class MapCaptureSession(context: Context) {
     private val root = File(context.getExternalFilesDir(null) ?: context.filesDir, "map-sessions/$sessionId")
     private val images = File(root, "images")
     private val keyframes = JSONArray()
-    private var lastPose: Pose? = null
+    // Keep tracked references, not numerical world poses from unrelated frames.
+    private val cameraAnchors = ArrayList<Anchor>()
+    private var snapshotTimestampNs = 0L
+    private var snapshotCount = 0
     private var lastCaptureTimestampNs = 0L
     private var closed = false
+    private val depthEnabled = session.config.depthMode != Config.DepthMode.DISABLED
+    @Volatile var depthFrameCount: Int = 0
+        private set
+    @Volatile var depthStatus: String = if (depthEnabled) "Esperando mediciones de profundidad" else "Profundidad no disponible en esta sesión"
+        private set
+    val isClosed: Boolean get() = closed
 
     @Volatile
     var keyframeCount: Int = 0
+        private set
+
+    @Volatile
+    var guidance: String = "Mira la cajonera y sus alrededores. Desplázate despacio hacia un lado, manteniéndolos en pantalla."
         private set
 
     init {
@@ -50,22 +68,43 @@ class MapCaptureSession(context: Context) {
 
     @Synchronized
     fun onFrame(frame: Frame) {
-        if (closed || frame.camera.trackingState != TrackingState.TRACKING) return
+        if (closed) return
+        if (frame.camera.trackingState != TrackingState.TRACKING) {
+            guidance = "Seguimiento perdido: detente y vuelve a mirar una zona con detalles."
+            return
+        }
+        refreshPoseSnapshot(frame.timestamp)
+        if (keyframeCount >= 80) {
+            guidance = "Has llegado a 80 fotos. Pulsa detener y exportar para comprobar el mapa."
+            return
+        }
         val pose = frame.camera.pose
+        if (cameraAnchors.any { it.trackingState != TrackingState.TRACKING }) {
+            guidance = "Estoy recuperando las referencias anteriores. Vuelve despacio a la zona inicial."
+            return
+        }
         if (!shouldCapture(pose, frame.timestamp)) return
 
         try {
             frame.acquireCameraImage().use { image ->
+                val depth = if (depthEnabled) RawDepthCapture.capture(frame, image.width, image.height) else null
+                if (depthEnabled && depth == null) {
+                    depthStatus = "Esperando una medición nueva; muévete despacio manteniendo detalles visibles."
+                    return
+                }
                 val id = "%05d".format(keyframeCount)
                 val imageName = "$id.jpg"
                 File(images, imageName).writeBytes(image.toJpeg(90))
 
                 val intrinsics = frame.camera.imageIntrinsics
-                keyframes.put(
-                    JSONObject()
+                val keyframe = JSONObject()
                         .put("id", id)
                         .put("image", "images/$imageName")
                         .put("timestampNs", image.timestamp)
+                        .put("frameTimestampNs", frame.timestamp)
+                        .put("depth", depth?.save(root, id) ?: JSONObject.NULL)
+                        .put("capturePoseTranslationMeters", JSONArray(pose.translation.toList()))
+                        .put("capturePoseRotationQuaternion", JSONArray(pose.rotationQuaternion.toList()))
                         .put("poseTranslationMeters", JSONArray(pose.translation.toList()))
                         .put("poseRotationQuaternion", JSONArray(pose.rotationQuaternion.toList()))
                         .put(
@@ -75,22 +114,38 @@ class MapCaptureSession(context: Context) {
                                 .put("principalPointPixels", JSONArray(intrinsics.principalPoint.toList()))
                                 .put("imageDimensionsPixels", JSONArray(intrinsics.imageDimensions.toList())),
                         )
-                )
+                val anchor = session.createAnchor(pose)
+                cameraAnchors.add(anchor)
+                keyframes.put(keyframe)
                 keyframeCount++
-                lastPose = pose
+                if (depth != null) {
+                    depthFrameCount++
+                    depthStatus = if (depth.confidentPixels == 0)
+                        "Foto guardada sin distancias de confianza alta. Acércate a una zona con más detalles."
+                    else "Distancias guardadas en $depthFrameCount fotos. Comprobación del mapa pendiente."
+                }
                 lastCaptureTimestampNs = frame.timestamp
+                refreshPoseSnapshot(frame.timestamp, true)
+                guidance = "${keyframeCount}/80 fotos. Mantén zonas ya vistas en pantalla y cambia de posición; no solo gires el móvil."
                 writeManifest(null)
             }
         } catch (_: NotYetAvailableException) {
             // A later tracked frame will be eligible again.
+        } catch (_: ResourceExhaustedException) {
+            guidance = "Límite de referencias del dispositivo: detén y exporta esta captura."
         }
     }
 
     @Synchronized
     fun finish(): Result {
         check(!closed) { "Map capture session is already finished" }
-        closed = true
+        check(keyframeCount >= 12) { "Faltan vistas: captura al menos 12 fotos antes de exportar." }
+        check(snapshotCount == keyframeCount && snapshotTimestampNs > 0) {
+            "Espera a recuperar el seguimiento de todas las referencias antes de exportar."
+        }
         writeManifest(Instant.now().toString())
+        closed = true
+        releaseAnchors()
         val archive = File(root.parentFile, "$sessionId.zip")
         ZipOutputStream(FileOutputStream(archive)).use { zip ->
             root.walkTopDown().filter { it.isFile }.forEach { file ->
@@ -104,20 +159,52 @@ class MapCaptureSession(context: Context) {
     }
 
     private fun shouldCapture(pose: Pose, timestampNs: Long): Boolean {
-        val previous = lastPose ?: return true
+        val previous = cameraAnchors.lastOrNull()?.pose ?: return true
         val elapsedMs = (timestampNs - lastCaptureTimestampNs) / 1_000_000.0
         if (elapsedMs < MIN_INTERVAL_MS) return false
         return translationDistance(previous, pose) >= MIN_TRANSLATION_METERS ||
             rotationDegrees(previous, pose) >= MIN_ROTATION_DEGREES
     }
 
+    /** Called only from the frame consumer: all exported poses use one ARCore update. */
+    private fun refreshPoseSnapshot(timestampNs: Long, force: Boolean = false) {
+        if (!force && timestampNs - snapshotTimestampNs < 250_000_000L) return
+        if (cameraAnchors.isEmpty() || cameraAnchors.any { it.trackingState != TrackingState.TRACKING }) return
+        val currentPoses = cameraAnchors.map { it.pose }
+        val mapFromWorld = currentPoses.first().inverse()
+        currentPoses.forEachIndexed { index, worldPose ->
+            val pose = mapFromWorld.compose(worldPose)
+            keyframes.getJSONObject(index)
+                .put("poseTranslationMeters", JSONArray(pose.translation.toList()))
+                .put("poseRotationQuaternion", JSONArray(pose.rotationQuaternion.toList()))
+        }
+        snapshotTimestampNs = timestampNs
+        snapshotCount = currentPoses.size
+    }
+
+    private fun releaseAnchors() {
+        cameraAnchors.forEach { it.detach() }
+        cameraAnchors.clear()
+    }
+
+    @Synchronized
+    override fun close() {
+        closed = true
+        releaseAnchors()
+    }
+
     private fun writeManifest(completedAt: String?) {
         val manifest = JSONObject()
-            .put("schemaVersion", 1)
+            .put("schemaVersion", 2)
+            .put("landmarkSource", if (depthEnabled) "RAW_DEPTH" else "TRIANGULATED_RGB")
+            .put("depthFrameCount", depthFrameCount)
             .put("sessionId", sessionId)
             .put("startedAt", startedAt)
             .put("completedAt", completedAt ?: JSONObject.NULL)
-            .put("coordinateFrame", "ARCORE_SESSION_LOCAL")
+            .put("coordinateFrame", "ARCORE_ANCHOR_SNAPSHOT")
+            .put("poseSnapshotTimestampNs", snapshotTimestampNs)
+            .put("poseSnapshotCount", snapshotCount)
+            .put("poseReference", "FIRST_KEYFRAME_ANCHOR")
             .put(
                 "keyframePolicy",
                 JSONObject()

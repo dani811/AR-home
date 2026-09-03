@@ -49,6 +49,10 @@ class MapValidationWorker(context: Context, params: WorkerParameters) : Worker(c
             progress(1, "Leyendo captura")
             val map = PersistentMapLoader().load(File(directory, "map"))
             report.put("mapSessionId", map.sessionId).put("frameCount", map.keyframes.size)
+            report.put("landmarkSource", map.landmarkSource)
+                .put("coordinateFrame", map.coordinateFrame)
+                .put("depthFrameCount", map.keyframes.count { it.depth != null })
+                .put("poseReferenceIsGroundTruth", false)
             report.put("inputFingerprint", File(directory, "fingerprint.txt").readText())
             require(map.keyframes.size in ValidationPolicy.MIN_FRAMES..ValidationPolicy.MAX_FRAMES) {
                 "Esta comprobación admite entre ${ValidationPolicy.MIN_FRAMES} y ${ValidationPolicy.MAX_FRAMES} fotos; recibidas: ${map.keyframes.size}."

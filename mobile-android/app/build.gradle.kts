@@ -12,8 +12,8 @@ android {
         applicationId = "io.arhome.capabilities"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         manifestPlaceholders["appLabel"] = "AR Home Localizer"
     }
 
@@ -21,8 +21,8 @@ android {
         getByName("debug") {
             if (isolatedInstall) {
                 applicationIdSuffix = ".validation"
-                versionNameSuffix = "-validation"
-                manifestPlaceholders["appLabel"] = "AR Home Validacion"
+                versionNameSuffix = "-depth"
+                manifestPlaceholders["appLabel"] = "AR Home Localizer"
             }
         }
     }

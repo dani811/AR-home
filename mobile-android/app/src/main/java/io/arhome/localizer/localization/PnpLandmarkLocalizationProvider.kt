@@ -76,13 +76,15 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider, AutoCloseable {
             val queryKeypoints = keypointMat.toList()
             val pairs = mutableListOf<MatOfDMatch>()
             matcher.knnMatch(queryDescriptors, landmarkDescriptors, pairs, 2)
-            val good = buildList {
+            val candidates = buildList {
                 pairs.forEach { pair ->
                     val values = pair.toArray()
                     if (values.size >= 2 && values[0].distance < LOWE_RATIO * values[1].distance) add(values[0])
                     pair.release()
                 }
             }
+            val good = if (map.landmarkSource == "RAW_DEPTH") candidates.sortedBy { it.distance }.distinctBy { it.trainIdx }
+                else candidates
             if (good.size < MIN_PNP_CORRESPONDENCES) {
                 latestStatus = PnpLocalizationStatus(built.landmarks.size, good.size, 0, "Too few 2D→3D matches")
                 return null

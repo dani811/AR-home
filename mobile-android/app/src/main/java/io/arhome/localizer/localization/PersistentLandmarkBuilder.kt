@@ -47,6 +47,10 @@ class PersistentLandmarkBuilder {
     private val matcher = DescriptorMatcher.create(DescriptorMatcher.BRUTEFORCE_HAMMING)
 
     fun build(map: PersistentMap, checkpoint: () -> Unit = {}): PersistentLandmarkMap {
+        if (map.landmarkSource == "RAW_DEPTH") {
+            try { return DepthLandmarkBuilder().build(map, checkpoint) }
+            finally { orb.clear(); matcher.clear() }
+        }
         val features = ArrayList<Features>()
         val landmarks = ArrayList<PersistentVisualLandmark>()
         var evaluatedPairs = 0

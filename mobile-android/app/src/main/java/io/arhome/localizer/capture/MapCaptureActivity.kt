@@ -142,6 +142,7 @@ class MapCaptureActivity : Activity() {
         handler.removeCallbacks(refresh)
         arView?.setTrackedFrameConsumer(null)
         localizationExecutor.shutdownNow()
+        capture?.close()
         session?.close()
         session = null
         super.onDestroy()
@@ -361,11 +362,11 @@ class MapCaptureActivity : Activity() {
         try {
             val newSession = createSession("Start mapping") ?: return
             val view = createView(newSession)
-            val mapCapture = MapCaptureSession(this)
+            val mapCapture = MapCaptureSession(this, newSession)
             view.setTrackedFrameConsumer(mapCapture::onFrame)
             attachSession(newSession, view)
             capture = mapCapture
-            finalStatus = "Mapping started. Move naturally and inspect furniture from multiple angles."
+            finalStatus = "Captura iniciada. Mantén el mueble y su entorno visibles mientras te desplazas despacio."
         } catch (e: Exception) {
             resetFailedSession("Map capture failed", e)
         }
@@ -493,6 +494,7 @@ class MapCaptureActivity : Activity() {
         }
         return Session(this).also { newSession ->
             val config = newSession.config
+            config.focusMode = Config.FocusMode.AUTO
             if (newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) config.depthMode = Config.DepthMode.AUTOMATIC
             newSession.configure(config)
         }
@@ -517,6 +519,7 @@ class MapCaptureActivity : Activity() {
     private fun resetFailedSession(prefix: String, error: Throwable) {
         arView?.setTrackedFrameConsumer(null)
         arView?.let { root.removeView(it) }
+        capture?.close()
         session?.close()
         session = null
         arView = null
@@ -574,6 +577,7 @@ class MapCaptureActivity : Activity() {
             }
             renderStatus()
         } catch (e: Exception) {
+            if (!current.isClosed) arView?.setTrackedFrameConsumer(current::onFrame)
             finalStatus = "Map export failed: ${e.javaClass.simpleName}: ${e.message}"
             renderStatus()
         }
@@ -606,7 +610,11 @@ class MapCaptureActivity : Activity() {
         val tracking = arView?.snapshot()
         status.text = buildString {
             appendLine(finalStatus)
-            if (mapCapture != null) appendLine("Keyframes: ${mapCapture.keyframeCount}")
+            if (mapCapture != null) {
+                appendLine("Fotos: ${mapCapture.keyframeCount}")
+                appendLine(mapCapture.guidance)
+                appendLine(mapCapture.depthStatus)
+            }
             preparationMs?.let { appendLine("Map preparation: $it ms (background)") }
             pnpRelocalizer?.latestStatus?.let { match ->
                 appendLine("PnP: ${match.message}")
