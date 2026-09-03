@@ -8,7 +8,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="AR Home Localizer"
+        android:label="${appLabel}"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 

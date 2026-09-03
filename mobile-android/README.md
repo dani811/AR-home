@@ -52,3 +52,14 @@ This initial worker accepts 12–160 images and cooperatively limits computation
 6. Restart the device during a queued/running job: WorkManager eventually reschedules, subject to OS restrictions (force-stop requires reopening the app).
 
 Build checks do not replace these device checks. The earlier Python replay of map-1788120232860 produced 5/10 accepted held-out views; Android OpenCV 4.14 may differ from that Python OpenCV 4.12 replay.
+
+### Isolated installation diagnostic
+
+CI currently builds with `-PisolatedInstall=true`. This keeps the validation
+implementation but installs debug builds as `io.arhome.capabilities.validation`,
+labelled **AR Home Validacion**, alongside the existing app. Its maps and reports
+are separate; import the map ZIP in this app. Without the property the original
+application ID and label are retained. This is a diagnostic for installation
+conflicts, not a repair of signing continuity. CI still needs a securely persisted
+signing key before these builds can reliably update one another. No private key
+is committed to the repository. Device installation remains a manual gate.

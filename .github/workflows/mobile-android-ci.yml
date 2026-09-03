@@ -27,11 +27,22 @@ jobs:
           gradle-version: '9.5.0'
       - name: Test, build and lint Android localizer
         working-directory: mobile-android
-        run: gradle :app:testDebugUnitTest :app:assembleDebug :app:lintDebug --stacktrace
+        run: gradle :app:testDebugUnitTest :app:assembleDebug :app:lintDebug -PisolatedInstall=true --stacktrace
+      - name: Verify isolated APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=mobile-android/app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk" > /tmp/apk-badging.txt
+          grep -F "package: name='io.arhome.capabilities.validation'" /tmp/apk-badging.txt
+          grep -F "application-label:'AR Home Validacion'" /tmp/apk-badging.txt
+          sha256sum "$apk"
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: ar-home-localizer-debug
+          name: ar-home-validation-isolated
           path: mobile-android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 3

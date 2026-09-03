@@ -2,6 +2,8 @@ plugins {
     id("com.android.application")
 }
 
+val isolatedInstall = providers.gradleProperty("isolatedInstall").orNull == "true"
+
 android {
     namespace = "io.arhome.capabilities"
     compileSdk = 36
@@ -12,6 +14,17 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        manifestPlaceholders["appLabel"] = "AR Home Localizer"
+    }
+
+    buildTypes {
+        getByName("debug") {
+            if (isolatedInstall) {
+                applicationIdSuffix = ".validation"
+                versionNameSuffix = "-validation"
+                manifestPlaceholders["appLabel"] = "AR Home Validacion"
+            }
+        }
     }
 
     compileOptions {
