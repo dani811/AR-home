@@ -20,6 +20,7 @@ class PersistentMapLoader {
             for (index in 0 until keyframesJson.length()) {
                 val json = keyframesJson.getJSONObject(index)
                 val image = File(root, json.getString("image"))
+                require(image.canonicalFile.toPath().startsWith(root.canonicalFile.toPath())) { "Keyframe image outside map root" }
                 require(image.isFile) { "Missing keyframe image: ${image.absolutePath}" }
 
                 val translation = json.floatArray("poseTranslationMeters")

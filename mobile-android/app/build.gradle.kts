@@ -21,6 +21,7 @@ android {
 }
 
 dependencies {
+    implementation("androidx.work:work-runtime:2.10.5")
     implementation("com.google.ar:core:1.54.0")
     implementation("org.opencv:opencv:4.14.0")
     testImplementation("junit:junit:4.13.2")

@@ -3,6 +3,16 @@ package io.arhome.localizer.capture
 import android.Manifest
 import android.annotation.TargetApi
 import android.app.Activity
+import android.app.AlertDialog
+import android.widget.ScrollView
+import android.widget.ImageView
+import android.graphics.BitmapFactory
+import androidx.lifecycle.Observer
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import io.arhome.localizer.validation.MapValidationJobs
+import org.json.JSONObject
+import java.util.UUID
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -35,6 +45,13 @@ class MapCaptureActivity : Activity() {
 
     private lateinit var root: LinearLayout
     private lateinit var status: TextView
+    private lateinit var validationStatus: TextView
+    private var validationId: UUID? = null
+    private var validationLiveData: androidx.lifecycle.LiveData<WorkInfo?>? = null
+    private var validationObserver: Observer<WorkInfo?>? = null
+    private var importing = false
+    private var validationPending = false
+    private var validationOutcome: String? = null
     private lateinit var mapStore: PersistentMapStore
     private val handler = Handler(Looper.getMainLooper())
     private val localizationExecutor = Executors.newSingleThreadExecutor()
@@ -69,7 +86,7 @@ class MapCaptureActivity : Activity() {
         mapStore = PersistentMapStore(File(filesDir, "persistent-map"))
         persistentMap = mapStore.currentOrNull()
         persistentMap?.let {
-            finalStatus = "Persistent map ready: ${it.sessionId} · ${it.keyframes.size} keyframes."
+            finalStatus = "Mapa guardado (consulta su validación): ${it.sessionId} · ${it.keyframes.size} keyframes."
         }
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -87,10 +104,17 @@ class MapCaptureActivity : Activity() {
         root.addView(button("Stop and export map") { stopAndExport() })
         root.addView(button("Import persistent map ZIP") { selectMapArchive() })
         root.addView(button("Start fresh-session relocalization") { ensureCameraAndRelocalize() })
+        validationStatus = TextView(this).apply { textSize = 15f; text = "Sin mapa validado." }
+        root.addView(validationStatus)
+        root.addView(button("Ver informe y fotos a revisar") { showValidationReport() })
         status = TextView(this).apply { textSize = 14f }
         root.addView(status)
-        setContentView(root)
+        setContentView(ScrollView(this).apply { addView(root) })
         renderStatus()
+        MapValidationJobs.currentId(this, persistentMap)?.let(::observeValidation)
+        if (validationId == null && persistentMap != null) {
+            queueValidation(persistentMap!!)
+        }
     }
 
     override fun onResume() {
@@ -114,6 +138,7 @@ class MapCaptureActivity : Activity() {
     }
 
     override fun onDestroy() {
+        validationObserver?.let { validationLiveData?.removeObserver(it) }
         handler.removeCallbacks(refresh)
         arView?.setTrackedFrameConsumer(null)
         localizationExecutor.shutdownNow()
@@ -138,21 +163,142 @@ class MapCaptureActivity : Activity() {
     @Deprecated("Uses platform document picker for map import")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REPORT_EXPORT_REQUEST && resultCode == RESULT_OK) {
+            try {
+                val id = validationId ?: return
+                val uri = data?.data ?: return
+                contentResolver.openOutputStream(uri)?.use { output ->
+                    File(MapValidationJobs.directory(this, id), "report.json").inputStream().use { it.copyTo(output) }
+                } ?: error("No se pudo abrir el destino")
+                validationStatus.append("\nInforme exportado.")
+            } catch (e: Exception) { validationStatus.append("\nError de exportación: ${e.message}") }
+            return
+        }
         if (requestCode != MAP_IMPORT_REQUEST || resultCode != RESULT_OK) return
         val uri = data?.data ?: run {
             finalStatus = "Map import failed: no file was returned."
             renderStatus()
             return
         }
-        try {
-            val input = contentResolver.openInputStream(uri) ?: error("Android could not open the selected ZIP")
-            val map = input.use(mapStore::import)
-            persistentMap = map
-            finalStatus = "Persistent map imported: ${map.sessionId} · ${map.keyframes.size} keyframes. It will survive a full app restart."
-        } catch (e: Exception) {
-            finalStatus = "Map import failed: ${e.javaClass.simpleName}: ${e.message}"
+        importing = true
+        validationPending = true
+        validationOutcome = null
+        validationStatus.text = "Importando mapa y preparando comprobación…"
+        localizationExecutor.execute {
+            try {
+                val input = contentResolver.openInputStream(uri) ?: error("No se pudo abrir el ZIP")
+                val map = input.use(mapStore::import)
+                val jobId = MapValidationJobs.enqueue(applicationContext, map)
+                handler.post {
+                    if (isDestroyed) return@post
+                    importing = false
+                    persistentMap = map
+                    finalStatus = "Mapa importado. La comprobación continúa aunque salgas de la app."
+                    observeValidation(jobId)
+                    renderStatus()
+                }
+            } catch (e: Exception) {
+                handler.post {
+                    if (isDestroyed) return@post
+                    importing = false
+                    validationPending = false
+                    validationStatus.text = "No se pudo preparar la validación: ${e.message}"
+                    finalStatus = "Importación o preparación fallida. Vuelve a importar el ZIP."
+                    renderStatus()
+                }
+            }
         }
-        renderStatus()
+    }
+
+    private fun queueValidation(map: PersistentMap) {
+        validationPending = true
+        validationOutcome = null
+        importing = true
+        validationStatus.text = "Preparando comprobación del mapa…"
+        localizationExecutor.execute {
+            try {
+                val jobId = MapValidationJobs.enqueue(applicationContext, map)
+                handler.post { if (!isDestroyed) { importing = false; observeValidation(jobId) } }
+            } catch (e: Exception) {
+                handler.post { if (!isDestroyed) {
+                    importing = false
+                    validationPending = false
+                    validationStatus.text = "No se pudo preparar la validación: ${e.message}"
+                } }
+            }
+        }
+    }
+
+    private fun observeValidation(id: UUID) {
+        validationObserver?.let { validationLiveData?.removeObserver(it) }
+        validationId = id
+        val data = WorkManager.getInstance(this).getWorkInfoByIdLiveData(id)
+        val observer = Observer<WorkInfo?> { info ->
+            if (info == null) {
+                val saved = File(MapValidationJobs.directory(this, id), "report.json")
+                val report = runCatching { JSONObject(saved.readText()) }.getOrNull()
+                validationPending = false
+                validationOutcome = report?.optString("outcome")
+                validationStatus.text = report?.optString("message") ?: "No hay una comprobación disponible. Vuelve a importar el mapa."
+                return@Observer
+            }
+            validationPending = !info.state.isFinished
+            validationOutcome = info.outputData.getString("outcome")
+            validationStatus.text = when (info.state) {
+                WorkInfo.State.SUCCEEDED -> info.outputData.getString("message") ?: "Consulta el informe."
+                WorkInfo.State.FAILED -> "No se pudo completar la comprobación. Vuelve a importar el mapa."
+                WorkInfo.State.CANCELLED -> "Comprobación cancelada. Vuelve a importar el mapa."
+                WorkInfo.State.RUNNING -> "Comprobando mapa: ${info.progress.getInt("percent", 0)}% · ${info.progress.getString("message") ?: "Preparando"}"
+                else -> "Comprobación pendiente. Android la ejecutará cuando pueda; puedes salir de la app."
+            }
+        }
+        validationLiveData = data
+        validationObserver = observer
+        data.observeForever(observer)
+    }
+
+    private fun showValidationReport() {
+        val id = validationId ?: return
+        val directory = MapValidationJobs.directory(this, id)
+        val file = File(directory, "report.json")
+        if (!file.isFile) {
+            AlertDialog.Builder(this).setMessage("El informe estará disponible al terminar la comprobación.").setPositiveButton("Aceptar", null).show()
+            return
+        }
+        try {
+            val report = JSONObject(file.readText())
+            val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 24, 24, 24) }
+            panel.addView(TextView(this).apply {
+                text = report.optString("message") + "\nComprobación interna con fotos de la misma sesión. No garantiza recuperación al volver otro día.\nLos criterios son provisionales: 90% de vistas, error ≤20 cm y ≤5° respecto a ARCore."
+            })
+            val failed = linkedSetOf<String>()
+            listOf("failedViewIds", "weakImages").forEach { key -> report.optJSONArray(key)?.let { a ->
+                for (i in 0 until a.length()) failed += a.getString(i)
+            } }
+            if (failed.isNotEmpty()) {
+                panel.addView(TextView(this).apply { text = "Estas vistas necesitan revisión. Para ampliar la captura, mantén detalles fijos visibles desde varias posiciones; evita giros rápidos y paredes lisas." })
+                val map = io.arhome.localizer.map.PersistentMapLoader().load(File(directory, "map"))
+                map.keyframes.filter { it.id in failed }.forEach { frame ->
+                    panel.addView(TextView(this).apply { text = "Vista ${frame.id}" })
+                    panel.addView(ImageView(this).apply {
+                        adjustViewBounds = true
+                        setImageBitmap(BitmapFactory.decodeFile(frame.image.absolutePath, BitmapFactory.Options().apply { inSampleSize = 2 }))
+                    })
+                }
+            }
+            AlertDialog.Builder(this).setTitle("Resultado de la comprobación")
+                .setView(ScrollView(this).apply { addView(panel) })
+                .setPositiveButton("Cerrar", null)
+                .setNeutralButton("Exportar informe") { _, _ ->
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"
+                        putExtra(Intent.EXTRA_TITLE, "map-validation-$id.json")
+                    }, REPORT_EXPORT_REQUEST)
+                }.show()
+        } catch (e: Exception) {
+            validationStatus.text = "No se pudo abrir el informe: ${e.message}"
+        }
     }
 
     private fun button(label: String, action: () -> Unit) = Button(this).apply {
@@ -161,6 +307,7 @@ class MapCaptureActivity : Activity() {
     }
 
     private fun ensureCameraAndStart() {
+        if (importing || validationPending) { finalStatus = "Espera a que termine la comprobación del mapa."; renderStatus(); return }
         if (relocalizationPreparing) {
             finalStatus = "Wait for relocalization map preparation to finish before starting mapping."
             renderStatus()
@@ -179,6 +326,12 @@ class MapCaptureActivity : Activity() {
     }
 
     private fun ensureCameraAndRelocalize() {
+        if (importing || validationPending) { finalStatus = "Espera a que termine la comprobación del mapa."; renderStatus(); return }
+        if (validationOutcome != "INTERNAL_PASS") {
+            finalStatus = "El mapa no ha superado la comprobación interna. Abre el informe antes de probar la recuperación."
+            renderStatus()
+            return
+        }
         if (persistentMap == null) {
             finalStatus = "Import a persistent map ZIP before relocalizing."
             renderStatus()
@@ -350,7 +503,7 @@ class MapCaptureActivity : Activity() {
     )
 
     private fun attachSession(newSession: Session, view: ActiveArCoreProbeView) {
-        root.addView(view, 2, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(view, 2, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (300 * resources.displayMetrics.density).toInt()))
         session = newSession
         arView = view
         newSession.resume()
@@ -393,7 +546,29 @@ class MapCaptureActivity : Activity() {
             } else {
                 result.archive.absolutePath
             }
-            finalStatus = "Map complete: ${result.keyframeCount} keyframes\nSaved: $publicLocation\nFully restart the app before the fresh-session test."
+            arView?.onPause()
+            session?.pause()
+            session?.close()
+            session = null
+            arView?.let { root.removeView(it) }
+            arView = null
+            finalStatus = "Captura guardada: ${result.keyframeCount} fotos.\nArchivo: $publicLocation\nPendiente de comprobación interna."
+            importing = true
+            validationPending = true
+            validationOutcome = null
+            validationStatus.text = "Preparando comprobación del mapa…"
+            localizationExecutor.execute {
+                try {
+                    val map = result.archive.inputStream().use(mapStore::import)
+                    val jobId = MapValidationJobs.enqueue(applicationContext, map)
+                    handler.post { if (!isDestroyed) { importing = false; persistentMap = map; observeValidation(jobId) } }
+                } catch (e: Exception) {
+                    handler.post { if (!isDestroyed) {
+                        importing = false; validationPending = false
+                        validationStatus.text = "No se pudo preparar la comprobación: ${e.message}. Importa el ZIP guardado."
+                    } }
+                }
+            }
             renderStatus()
         } catch (e: Exception) {
             finalStatus = "Map export failed: ${e.javaClass.simpleName}: ${e.message}"
@@ -402,6 +577,7 @@ class MapCaptureActivity : Activity() {
     }
 
     private fun selectMapArchive() {
+        if (importing) return
         if (relocalizationPreparing) {
             finalStatus = "Wait for relocalization map preparation to finish before importing another map."
             renderStatus()
@@ -483,6 +659,7 @@ class MapCaptureActivity : Activity() {
 
     companion object {
         private const val CAMERA_REQUEST = 51
+        private const val REPORT_EXPORT_REQUEST = 54
         private const val MAP_IMPORT_REQUEST = 52
         private const val RELOCALIZATION_CAMERA_REQUEST = 53
     }

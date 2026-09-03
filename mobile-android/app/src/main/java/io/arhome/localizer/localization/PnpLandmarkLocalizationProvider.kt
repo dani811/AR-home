@@ -24,7 +24,7 @@ data class PnpLocalizationStatus(
     val message: String = "Waiting for camera image",
 )
 
-class PnpLandmarkLocalizationProvider : LocalizationProvider {
+class PnpLandmarkLocalizationProvider : LocalizationProvider, AutoCloseable {
     private val orb: ORB = createOrb()
     private val matcher = DescriptorMatcher.create(DescriptorMatcher.BRUTEFORCE_HAMMING)
     private var preparedSessionId: String? = null
@@ -36,10 +36,10 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
     var latestStatus = PnpLocalizationStatus()
         private set
 
-    fun prepare(map: PersistentMap) {
+    fun prepare(map: PersistentMap, checkpoint: () -> Unit = {}) {
         if (preparedSessionId == map.sessionId) return
         landmarkDescriptors.release()
-        val built = PersistentLandmarkBuilder().build(map)
+        val built = PersistentLandmarkBuilder().build(map, checkpoint)
         latestStatus = PnpLocalizationStatus(
             landmarks = built.landmarks.size,
             message = "3D landmark map prepared",
@@ -51,6 +51,12 @@ class PnpLandmarkLocalizationProvider : LocalizationProvider {
         built.landmarks.forEachIndexed { index, landmark -> landmarkDescriptors.put(index, 0, landmark.descriptor) }
         landmarkMap = built
         preparedSessionId = map.sessionId
+    }
+
+    override fun close() {
+        landmarkDescriptors.release()
+        orb.clear()
+        matcher.clear()
     }
 
     override fun localize(map: PersistentMap, frame: Frame): LocalizationResult? =
