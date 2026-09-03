@@ -180,6 +180,9 @@ class MapCaptureActivity : Activity() {
             renderStatus()
             return
         }
+        validationObserver?.let { validationLiveData?.removeObserver(it) }
+        validationObserver = null
+        validationId = null
         importing = true
         validationPending = true
         validationOutcome = null
