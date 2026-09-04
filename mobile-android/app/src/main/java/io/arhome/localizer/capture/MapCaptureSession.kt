@@ -14,6 +14,7 @@ import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.NotYetAvailableException
 import com.google.ar.core.exceptions.ResourceExhaustedException
 import io.arhome.localizer.depth.RawDepthCapture
+import io.arhome.localizer.depth.RawDepthStatus
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -49,6 +50,9 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
     private var poseChainCount = 0
     private var pausedAnchorSinceNs = 0L
     private var lastCaptureTimestampNs = 0L
+    private var depthWaitStartedNs = 0L
+    private var depthAttemptCount = 0
+    private val depthAttemptCounts = RawDepthStatus.values().associateWith { 0 }.toMutableMap()
     private var closed = false
     private val depthEnabled = session.config.depthMode != Config.DepthMode.DISABLED
     @Volatile var depthFrameCount: Int = 0
@@ -76,6 +80,7 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
     fun onFrame(frame: Frame) {
         if (closed) return
         if (frame.camera.trackingState != TrackingState.TRACKING) {
+            depthWaitStartedNs = 0L
             captureState = "SEGUIMIENTO_PERDIDO"
             guidance = "Seguimiento perdido: detente y vuelve a mirar una zona con detalles."
             return
@@ -108,6 +113,21 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
             frame.acquireCameraImage().use { image ->
                 val depthAttempt = if (depthEnabled) RawDepthCapture.capture(frame, image.width, image.height) else null
                 val depth = depthAttempt?.sample
+                if (depthAttempt != null) {
+                    depthAttemptCount++
+                    depthAttemptCounts[depthAttempt.status] = checkNotNull(depthAttemptCounts[depthAttempt.status]) + 1
+                }
+                if (depthEnabled && depth == null) {
+                    if (depthWaitStartedNs == 0L) depthWaitStartedNs = frame.timestamp
+                    val elapsedNs = (frame.timestamp - depthWaitStartedNs).coerceAtLeast(0L)
+                    if (elapsedNs < MAX_FRESH_DEPTH_WAIT_NS) {
+                        val remainingMs = ceil((MAX_FRESH_DEPTH_WAIT_NS - elapsedNs) / 1_000_000.0).toInt()
+                        captureState = "ESPERANDO_PROFUNDIDAD_ACOTADA"
+                        guidance = "Posición lista. Mantén el móvil estable hasta ${remainingMs} ms; si no llega Depth, guardaré RGB igualmente."
+                        depthStatus = "Intento $depthAttemptCount: ${depthAttempt?.status} (${depthAttempt?.detail})."
+                        return
+                    }
+                }
                 val id = "%05d".format(keyframeCount)
                 val imageName = "$id.jpg"
                 val newAnchor = session.createAnchor(pose)
@@ -158,6 +178,7 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
                     depthStatus = "Foto $keyframeCount guardada sin profundidad: ${depthAttempt?.status} (${depthAttempt?.detail})."
                 }
                 lastCaptureTimestampNs = frame.timestamp
+                depthWaitStartedNs = 0L
                 captureState = if (depthEnabled && depth == null) "FOTO_GUARDADA_SIN_PROFUNDIDAD" else "FOTO_GUARDADA"
                 guidance = "${keyframeCount}/80 fotos. Mantén zonas ya vistas en pantalla y cambia de posición; no solo gires el móvil."
                 writeManifest(null)
@@ -204,6 +225,7 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
         val angle = rotationDegrees(previous, pose)
         val moved = distance >= MIN_TRANSLATION_METERS || angle >= MIN_ROTATION_DEGREES
         if (!moved) {
+            depthWaitStartedNs = 0L
             captureState = "ESPERANDO_MOVIMIENTO"
             val remainingCm = ceil((MIN_TRANSLATION_METERS - distance) * 100).toInt().coerceAtLeast(0)
             val remainingDegrees = ceil(MIN_ROTATION_DEGREES - angle).toInt().coerceAtLeast(0)
@@ -231,6 +253,9 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
         poseChainCount = 0
         poseChainTimestampNs = 0L
         lastCaptureTimestampNs = 0L
+        depthWaitStartedNs = 0L
+        depthAttemptCount = 0
+        depthAttemptCounts.keys.forEach { depthAttemptCounts[it] = 0 }
         pausedAnchorSinceNs = 0L
         depthStatus = if (depthEnabled) "Esperando mediciones de profundidad" else "Profundidad no disponible en esta sesión"
         writeManifest(null)
@@ -245,8 +270,13 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
     private fun writeManifest(completedAt: String?) {
         val manifest = JSONObject()
             .put("schemaVersion", 3)
-            .put("landmarkSource", if (depthFrameCount > 0) "RAW_DEPTH" else "TRIANGULATED_RGB")
+            .put("landmarkSource", LandmarkSourcePolicy.select(keyframeCount, depthFrameCount))
             .put("depthFrameCount", depthFrameCount)
+            .put("depthMode", session.config.depthMode.name)
+            .put("depthAttemptCount", depthAttemptCount)
+            .put("depthAttemptStatusCounts", JSONObject().apply {
+                depthAttemptCounts.forEach { (status, count) -> put(status.name, count) }
+            })
             .put("sessionId", sessionId)
             .put("startedAt", startedAt)
             .put("completedAt", completedAt ?: JSONObject.NULL)
@@ -318,6 +348,7 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
         private const val MIN_INTERVAL_MS = 500.0
         private const val MIN_TRANSLATION_METERS = 0.20
         private const val MIN_ROTATION_DEGREES = 12.0
+        private const val MAX_FRESH_DEPTH_WAIT_NS = 750_000_000L
         private const val SINGLE_REFERENCE_RECOVERY_NS = 2_000_000_000L
     }
 }

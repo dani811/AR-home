@@ -48,10 +48,16 @@ class MapValidationWorker(context: Context, params: WorkerParameters) : Worker(c
             check(OpenCVLoader.initDebug()) { "No se pudo iniciar el motor de visión." }
             progress(1, "Leyendo captura")
             val map = PersistentMapLoader().load(File(directory, "map"))
+            val manifest = JSONObject(File(map.root, "manifest.json").readText())
+            val depthFrames = map.keyframes.count { it.depth != null }
             report.put("mapSessionId", map.sessionId).put("frameCount", map.keyframes.size)
             report.put("landmarkSource", map.landmarkSource)
                 .put("coordinateFrame", map.coordinateFrame)
-                .put("depthFrameCount", map.keyframes.count { it.depth != null })
+                .put("depthFrameCount", depthFrames)
+                .put("depthCoverageFraction", depthFrames.toDouble() / map.keyframes.size)
+                .put("depthMode", manifest.optString("depthMode", "NO_REGISTRADO"))
+                .put("depthAttemptCount", manifest.optInt("depthAttemptCount", 0))
+                .put("depthAttemptStatusCounts", manifest.optJSONObject("depthAttemptStatusCounts") ?: JSONObject())
                 .put("poseReferenceIsGroundTruth", false)
             report.put("inputFingerprint", File(directory, "fingerprint.txt").readText())
             require(map.keyframes.size in ValidationPolicy.MIN_FRAMES..ValidationPolicy.MAX_FRAMES) {

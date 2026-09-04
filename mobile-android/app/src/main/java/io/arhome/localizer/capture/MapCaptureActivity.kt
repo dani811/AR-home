@@ -273,7 +273,15 @@ class MapCaptureActivity : Activity() {
             val report = JSONObject(file.readText())
             val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 24, 24, 24) }
             panel.addView(TextView(this).apply {
-                text = report.optString("message") + "\nComprobación interna con fotos de la misma sesión. No garantiza recuperación al volver otro día.\nLos criterios son provisionales: 90% de vistas, error ≤20 cm y ≤5° respecto a ARCore."
+                val depthFrames = report.optInt("depthFrameCount", 0)
+                val frameCount = report.optInt("frameCount", 0)
+                val attempts = report.optInt("depthAttemptCount", 0)
+                val outcomes = report.optJSONObject("depthAttemptStatusCounts")?.toString() ?: "{}"
+                text = report.optString("message") +
+                    "\nFotos: $frameCount · con profundidad: $depthFrames · fuente 3D: ${report.optString("landmarkSource", "NO_REGISTRADA")}" +
+                    "\nDepth: modo ${report.optString("depthMode", "NO_REGISTRADO")} · intentos $attempts · resultados $outcomes" +
+                    "\nComprobación interna con fotos de la misma sesión. No garantiza recuperación al volver otro día." +
+                    "\nLos criterios son provisionales: 90% de vistas, error ≤20 cm y ≤5° respecto a ARCore."
             })
             val failed = linkedSetOf<String>()
             listOf("failedViewIds", "weakImages").forEach { key -> report.optJSONArray(key)?.let { a ->

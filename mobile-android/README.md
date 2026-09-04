@@ -72,9 +72,11 @@ supported sessions, a fresh raw depth image (unsigned millimeters, little
 endian) and confidence bytes are attached when ARCore provides them. The
 manifest records all timestamps and the per-frame affine mapping from CPU image
 pixels to depth UVs; it does not assume that RGB and depth have equal aspect
-ratios. Reprojected old depth frames are skipped. Missing fresh depth is reported
-but never blocks the RGB keyframe. Unsupported devices retain RGB capture and
-declare that source.
+ratios. Reprojected old depth frames are skipped. Once a new capture position is
+ready, the app waits at most 750 ms for a fresh depth measurement, then saves the
+RGB keyframe even if none arrived. The screen and manifest report the configured
+mode, attempt count, outcome counts and timestamps. Unsupported devices retain
+RGB capture and declare that source.
 
 The capture keeps only its latest local ARCore anchor. Before accepting the next
 view, it composes the relative transform while the previous and new anchors are
@@ -88,7 +90,10 @@ latest reference state instead of silently corrupting it. Capture is bounded at
 cross-session persistence. No cloud anchors, service calls or QR markers are
 involved. Schema-2 anchor-snapshot and schema-1 legacy maps remain readable.
 
-Raw-depth maps build ORB landmarks by backprojecting reliable measurements.
+Raw-depth maps build ORB landmarks by backprojecting reliable measurements. A
+single lucky depth frame cannot force the complete map onto that path: raw depth
+is selected only with at least six depth frames covering at least half of all
+views; otherwise the complete RGB sequence uses triangulation.
 The initial, provisional policy requires confidence >=192/255, optical depth
 0.2–8 m and five consistent samples in a 3x3 neighborhood. Mixed-depth edges
 are rejected at max(50 mm, 5% of depth). One depth pixel contributes at most
