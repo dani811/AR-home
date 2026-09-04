@@ -65,7 +65,7 @@ conflicts, not a repair of signing continuity. CI still needs a securely persist
 signing key before these builds can reliably update one another. No private key
 is committed to the repository. Device installation remains a manual gate.
 
-### Depth capture and reconstruction (schema 2)
+### Depth capture and reconstruction (schema 3)
 
 The depth scan build enables autofocus and checks Depth support at runtime. On
 supported sessions every saved RGB frame is accompanied by a fresh raw depth
@@ -75,11 +75,17 @@ to depth UVs; it does not assume that RGB and depth have equal aspect ratios.
 Reprojected old depth frames are skipped. Missing depth produces an explicit
 waiting state. Unsupported devices retain RGB capture and declare that source.
 
-Each captured camera pose has a local ARCore anchor. The exported poses are
-snapshotted together during one tracked frame, relative to the first anchor.
-Anchors are detached on completion/destruction; capture is bounded at 80 views.
-The snapshot is an ARCore estimate, not physical ground truth or cross-session
-persistence. No cloud anchors, service calls or QR markers are involved.
+The capture keeps only its latest local ARCore anchor. Before accepting the next
+view, it composes the relative transform while the previous and new anchors are
+both tracking in the same ARCore update, then detaches the previous anchor. This
+forms a pairwise pose chain relative to the first view without requiring every
+historical anchor to remain tracked for the whole scan. If the only initial
+anchor is lost for two seconds, that unusable single view is discarded and the
+capture restarts automatically. A longer chain is preserved and reports the
+latest reference state instead of silently corrupting it. Capture is bounded at
+80 views. These poses remain ARCore estimates, not physical ground truth or
+cross-session persistence. No cloud anchors, service calls or QR markers are
+involved. Schema-2 anchor-snapshot and schema-1 legacy maps remain readable.
 
 Raw-depth maps build ORB landmarks by backprojecting reliable measurements.
 The initial, provisional policy requires confidence >=192/255, optical depth
@@ -98,6 +104,7 @@ missing depth measurements to existing captures.
 
 Validation: unit coverage for padded image-plane decoding, unsigned 16-bit
 values, crop/rotation alignment, camera-axis convention, missing measurements,
-confidence filtering and depth discontinuities. Real-device depth availability,
-performance, precision and recovery still need validation; a complete overlay
-and adaptive direction planner are not part of this build.
+confidence filtering, depth discontinuities, pairwise pose composition and map
+schema completeness. Real-device depth availability, performance, precision and
+recovery still need validation; a complete overlay and adaptive direction
+planner are not part of this build.

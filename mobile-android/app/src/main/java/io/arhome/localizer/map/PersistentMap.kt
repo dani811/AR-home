@@ -33,7 +33,11 @@ data class PersistentMap(
     val landmarkSource: String = "TRIANGULATED_RGB",
 ) {
     init {
-        require(coordinateFrame == "ARCORE_SESSION_LOCAL" || coordinateFrame == "ARCORE_ANCHOR_SNAPSHOT") {
+        require(coordinateFrame in setOf(
+            "ARCORE_SESSION_LOCAL",
+            "ARCORE_ANCHOR_SNAPSHOT",
+            "ARCORE_PAIRWISE_ANCHOR_CHAIN",
+        )) {
             "Unsupported coordinate frame: $coordinateFrame"
         }
         require(keyframes.isNotEmpty()) { "Persistent map contains no keyframes" }

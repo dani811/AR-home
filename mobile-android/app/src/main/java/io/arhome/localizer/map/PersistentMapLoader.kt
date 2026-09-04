@@ -13,13 +13,22 @@ class PersistentMapLoader {
 
         val manifest = JSONObject(manifestFile.readText())
         val schemaVersion = manifest.getInt("schemaVersion")
-        require(schemaVersion in 1..2) { "Unsupported map schema version: $schemaVersion" }
-
         val keyframesJson = manifest.getJSONArray("keyframes")
-        if (schemaVersion == 2) {
-            require(manifest.getInt("poseSnapshotCount") == keyframesJson.length() &&
-                manifest.getLong("poseSnapshotTimestampNs") > 0) { "Incomplete common-frame pose snapshot" }
-        }
+        PersistentMapSchema.validatePoseMetadata(
+            schemaVersion = schemaVersion,
+            coordinateFrame = manifest.getString("coordinateFrame"),
+            frameCount = keyframesJson.length(),
+            poseCount = when (schemaVersion) {
+                2 -> manifest.optInt("poseSnapshotCount", -1)
+                3 -> manifest.optInt("poseChainCount", -1)
+                else -> null
+            },
+            poseTimestampNs = when (schemaVersion) {
+                2 -> manifest.optLong("poseSnapshotTimestampNs", -1)
+                3 -> manifest.optLong("poseChainTimestampNs", -1)
+                else -> null
+            },
+        )
         val keyframes = buildList(keyframesJson.length()) {
             for (index in 0 until keyframesJson.length()) {
                 val json = keyframesJson.getJSONObject(index)
@@ -72,6 +81,30 @@ class PersistentMapLoader {
     private fun depthFile(root: File, path: String, bytes: Long): File = File(root, path).also {
         require(it.canonicalFile.toPath().startsWith(root.canonicalFile.toPath()) && it.isFile && it.length() == bytes) {
             "Missing, invalid or truncated depth data: $path"
+        }
+    }
+}
+
+object PersistentMapSchema {
+    const val CURRENT_VERSION = 3
+
+    fun validatePoseMetadata(
+        schemaVersion: Int,
+        coordinateFrame: String,
+        frameCount: Int,
+        poseCount: Int?,
+        poseTimestampNs: Long?,
+    ) {
+        require(schemaVersion in 1..CURRENT_VERSION) { "Unsupported map schema version: $schemaVersion" }
+        if (schemaVersion == 2) {
+            require(coordinateFrame == "ARCORE_ANCHOR_SNAPSHOT" && poseCount == frameCount && poseTimestampNs != null && poseTimestampNs > 0) {
+                "Incomplete common-frame pose snapshot"
+            }
+        }
+        if (schemaVersion == 3) {
+            require(coordinateFrame == "ARCORE_PAIRWISE_ANCHOR_CHAIN" && poseCount == frameCount && poseTimestampNs != null && poseTimestampNs > 0) {
+                "Incomplete pairwise anchor pose chain"
+            }
         }
     }
 }

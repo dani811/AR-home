@@ -612,6 +612,7 @@ class MapCaptureActivity : Activity() {
             appendLine(finalStatus)
             if (mapCapture != null) {
                 appendLine("Fotos: ${mapCapture.keyframeCount}")
+                appendLine("Estado de captura: ${mapCapture.captureState}")
                 appendLine(mapCapture.guidance)
                 appendLine(mapCapture.depthStatus)
             }

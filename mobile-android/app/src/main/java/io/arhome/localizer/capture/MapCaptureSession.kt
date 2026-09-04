@@ -24,6 +24,7 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.math.abs
 import kotlin.math.acos
+import kotlin.math.ceil
 import kotlin.math.sqrt
 
 class MapCaptureSession(context: Context, private val session: Session) : AutoCloseable {
@@ -40,16 +41,21 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
     private val root = File(context.getExternalFilesDir(null) ?: context.filesDir, "map-sessions/$sessionId")
     private val images = File(root, "images")
     private val keyframes = JSONArray()
-    // Keep tracked references, not numerical world poses from unrelated frames.
-    private val cameraAnchors = ArrayList<Anchor>()
-    private var snapshotTimestampNs = 0L
-    private var snapshotCount = 0
+    // Only the latest anchor remains live. Each accepted frame is linked to it
+    // before the previous anchor is detached, so both poses come from one update.
+    private var lastCaptureAnchor: Anchor? = null
+    private var lastMapPose = Pose.IDENTITY
+    private var poseChainTimestampNs = 0L
+    private var poseChainCount = 0
+    private var pausedAnchorSinceNs = 0L
     private var lastCaptureTimestampNs = 0L
     private var closed = false
     private val depthEnabled = session.config.depthMode != Config.DepthMode.DISABLED
     @Volatile var depthFrameCount: Int = 0
         private set
     @Volatile var depthStatus: String = if (depthEnabled) "Esperando mediciones de profundidad" else "Profundidad no disponible en esta sesión"
+        private set
+    @Volatile var captureState: String = "INICIALIZANDO"
         private set
     val isClosed: Boolean get() = closed
 
@@ -70,34 +76,55 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
     fun onFrame(frame: Frame) {
         if (closed) return
         if (frame.camera.trackingState != TrackingState.TRACKING) {
+            captureState = "SEGUIMIENTO_PERDIDO"
             guidance = "Seguimiento perdido: detente y vuelve a mirar una zona con detalles."
             return
         }
-        refreshPoseSnapshot(frame.timestamp)
         if (keyframeCount >= 80) {
+            captureState = "LIMITE_ALCANZADO"
             guidance = "Has llegado a 80 fotos. Pulsa detener y exportar para comprobar el mapa."
             return
         }
         val pose = frame.camera.pose
-        if (cameraAnchors.any { it.trackingState != TrackingState.TRACKING }) {
-            guidance = "Estoy recuperando las referencias anteriores. Vuelve despacio a la zona inicial."
+        val previousAnchor = lastCaptureAnchor
+        if (previousAnchor != null && previousAnchor.trackingState != TrackingState.TRACKING) {
+            if (pausedAnchorSinceNs == 0L) pausedAnchorSinceNs = frame.timestamp
+            if (keyframeCount == 1 && (previousAnchor.trackingState == TrackingState.STOPPED ||
+                    frame.timestamp - pausedAnchorSinceNs >= SINGLE_REFERENCE_RECOVERY_NS)) {
+                discardSingleLostReference()
+                captureState = "REINICIO_AUTOMATICO"
+                guidance = "La sesión perdió la primera referencia y la he descartado. Mantén esta zona visible mientras reinicio la captura."
+                return
+            }
+            captureState = "REFERENCIA_${previousAnchor.trackingState.name}"
+            guidance = "La sesión se interrumpió y la última referencia está ${previousAnchor.trackingState.name}. " +
+                "Mira la zona de la última foto hasta recuperarla."
             return
         }
+        pausedAnchorSinceNs = 0L
         if (!shouldCapture(pose, frame.timestamp)) return
 
         try {
             frame.acquireCameraImage().use { image ->
                 val depth = if (depthEnabled) RawDepthCapture.capture(frame, image.width, image.height) else null
                 if (depthEnabled && depth == null) {
-                    depthStatus = "Esperando una medición nueva; muévete despacio manteniendo detalles visibles."
+                    captureState = "ESPERANDO_PROFUNDIDAD"
+                    guidance = "Posición nueva detectada. Mantén el móvil estable un instante para recibir profundidad."
+                    depthStatus = "Movimiento suficiente; esperando la siguiente medición nueva de profundidad."
                     return
                 }
                 val id = "%05d".format(keyframeCount)
                 val imageName = "$id.jpg"
-                File(images, imageName).writeBytes(image.toJpeg(90))
+                val newAnchor = session.createAnchor(pose)
+                val prepared = try {
+                    check(newAnchor.trackingState == TrackingState.TRACKING) { "New capture anchor is not tracking" }
+                    val mapPose = if (previousAnchor == null) Pose.IDENTITY else {
+                        CapturePoseChain.append(lastMapPose, previousAnchor.pose, newAnchor.pose)
+                    }
+                    File(images, imageName).writeBytes(image.toJpeg(90))
 
-                val intrinsics = frame.camera.imageIntrinsics
-                val keyframe = JSONObject()
+                    val intrinsics = frame.camera.imageIntrinsics
+                    val keyframe = JSONObject()
                         .put("id", id)
                         .put("image", "images/$imageName")
                         .put("timestampNs", image.timestamp)
@@ -105,8 +132,8 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
                         .put("depth", depth?.save(root, id) ?: JSONObject.NULL)
                         .put("capturePoseTranslationMeters", JSONArray(pose.translation.toList()))
                         .put("capturePoseRotationQuaternion", JSONArray(pose.rotationQuaternion.toList()))
-                        .put("poseTranslationMeters", JSONArray(pose.translation.toList()))
-                        .put("poseRotationQuaternion", JSONArray(pose.rotationQuaternion.toList()))
+                        .put("poseTranslationMeters", JSONArray(mapPose.translation.toList()))
+                        .put("poseRotationQuaternion", JSONArray(mapPose.rotationQuaternion.toList()))
                         .put(
                             "intrinsics",
                             JSONObject()
@@ -114,10 +141,19 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
                                 .put("principalPointPixels", JSONArray(intrinsics.principalPoint.toList()))
                                 .put("imageDimensionsPixels", JSONArray(intrinsics.imageDimensions.toList())),
                         )
-                val anchor = session.createAnchor(pose)
-                cameraAnchors.add(anchor)
+                    mapPose to keyframe
+                } catch (error: Exception) {
+                    newAnchor.detach()
+                    throw error
+                }
+                val (mapPose, keyframe) = prepared
                 keyframes.put(keyframe)
                 keyframeCount++
+                poseChainCount = keyframeCount
+                poseChainTimestampNs = frame.timestamp
+                lastMapPose = mapPose
+                lastCaptureAnchor = newAnchor
+                previousAnchor?.detach()
                 if (depth != null) {
                     depthFrameCount++
                     depthStatus = if (depth.confidentPixels == 0)
@@ -125,13 +161,15 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
                     else "Distancias guardadas en $depthFrameCount fotos. Comprobación del mapa pendiente."
                 }
                 lastCaptureTimestampNs = frame.timestamp
-                refreshPoseSnapshot(frame.timestamp, true)
+                captureState = "FOTO_GUARDADA"
                 guidance = "${keyframeCount}/80 fotos. Mantén zonas ya vistas en pantalla y cambia de posición; no solo gires el móvil."
                 writeManifest(null)
             }
         } catch (_: NotYetAvailableException) {
-            // A later tracked frame will be eligible again.
+            captureState = "ESPERANDO_IMAGEN"
+            guidance = "Posición nueva detectada. Mantén el móvil estable un instante para guardar la foto."
         } catch (_: ResourceExhaustedException) {
+            captureState = "LIMITE_DE_RECURSOS"
             guidance = "Límite de referencias del dispositivo: detén y exporta esta captura."
         }
     }
@@ -140,8 +178,8 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
     fun finish(): Result {
         check(!closed) { "Map capture session is already finished" }
         check(keyframeCount >= 12) { "Faltan vistas: captura al menos 12 fotos antes de exportar." }
-        check(snapshotCount == keyframeCount && snapshotTimestampNs > 0) {
-            "Espera a recuperar el seguimiento de todas las referencias antes de exportar."
+        check(poseChainCount == keyframeCount && poseChainTimestampNs > 0) {
+            "La cadena de posiciones de la captura está incompleta."
         }
         writeManifest(Instant.now().toString())
         closed = true
@@ -159,32 +197,46 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
     }
 
     private fun shouldCapture(pose: Pose, timestampNs: Long): Boolean {
-        val previous = cameraAnchors.lastOrNull()?.pose ?: return true
+        val previous = lastCaptureAnchor?.pose ?: return true
         val elapsedMs = (timestampNs - lastCaptureTimestampNs) / 1_000_000.0
-        if (elapsedMs < MIN_INTERVAL_MS) return false
-        return translationDistance(previous, pose) >= MIN_TRANSLATION_METERS ||
-            rotationDegrees(previous, pose) >= MIN_ROTATION_DEGREES
-    }
-
-    /** Called only from the frame consumer: all exported poses use one ARCore update. */
-    private fun refreshPoseSnapshot(timestampNs: Long, force: Boolean = false) {
-        if (!force && timestampNs - snapshotTimestampNs < 250_000_000L) return
-        if (cameraAnchors.isEmpty() || cameraAnchors.any { it.trackingState != TrackingState.TRACKING }) return
-        val currentPoses = cameraAnchors.map { it.pose }
-        val mapFromWorld = currentPoses.first().inverse()
-        currentPoses.forEachIndexed { index, worldPose ->
-            val pose = mapFromWorld.compose(worldPose)
-            keyframes.getJSONObject(index)
-                .put("poseTranslationMeters", JSONArray(pose.translation.toList()))
-                .put("poseRotationQuaternion", JSONArray(pose.rotationQuaternion.toList()))
+        if (elapsedMs < MIN_INTERVAL_MS) {
+            captureState = "ESPERANDO_INTERVALO"
+            return false
         }
-        snapshotTimestampNs = timestampNs
-        snapshotCount = currentPoses.size
+        val distance = translationDistance(previous, pose)
+        val angle = rotationDegrees(previous, pose)
+        val moved = distance >= MIN_TRANSLATION_METERS || angle >= MIN_ROTATION_DEGREES
+        if (!moved) {
+            captureState = "ESPERANDO_MOVIMIENTO"
+            val remainingCm = ceil((MIN_TRANSLATION_METERS - distance) * 100).toInt().coerceAtLeast(0)
+            val remainingDegrees = ceil(MIN_ROTATION_DEGREES - angle).toInt().coerceAtLeast(0)
+            guidance = "Siguiente foto: desplázate $remainingCm cm más o gira $remainingDegrees° manteniendo detalles ya vistos."
+        }
+        return moved
     }
 
     private fun releaseAnchors() {
-        cameraAnchors.forEach { it.detach() }
-        cameraAnchors.clear()
+        lastCaptureAnchor?.detach()
+        lastCaptureAnchor = null
+    }
+
+    private fun discardSingleLostReference() {
+        check(keyframeCount == 1)
+        lastCaptureAnchor?.detach()
+        lastCaptureAnchor = null
+        File(images, "00000.jpg").delete()
+        File(root, "depth/00000.u16le").delete()
+        File(root, "depth/00000.confidence.u8").delete()
+        keyframes.remove(0)
+        keyframeCount = 0
+        depthFrameCount = 0
+        lastMapPose = Pose.IDENTITY
+        poseChainCount = 0
+        poseChainTimestampNs = 0L
+        lastCaptureTimestampNs = 0L
+        pausedAnchorSinceNs = 0L
+        depthStatus = if (depthEnabled) "Esperando mediciones de profundidad" else "Profundidad no disponible en esta sesión"
+        writeManifest(null)
     }
 
     @Synchronized
@@ -195,16 +247,16 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
 
     private fun writeManifest(completedAt: String?) {
         val manifest = JSONObject()
-            .put("schemaVersion", 2)
+            .put("schemaVersion", 3)
             .put("landmarkSource", if (depthEnabled) "RAW_DEPTH" else "TRIANGULATED_RGB")
             .put("depthFrameCount", depthFrameCount)
             .put("sessionId", sessionId)
             .put("startedAt", startedAt)
             .put("completedAt", completedAt ?: JSONObject.NULL)
-            .put("coordinateFrame", "ARCORE_ANCHOR_SNAPSHOT")
-            .put("poseSnapshotTimestampNs", snapshotTimestampNs)
-            .put("poseSnapshotCount", snapshotCount)
-            .put("poseReference", "FIRST_KEYFRAME_ANCHOR")
+            .put("coordinateFrame", "ARCORE_PAIRWISE_ANCHOR_CHAIN")
+            .put("poseChainTimestampNs", poseChainTimestampNs)
+            .put("poseChainCount", poseChainCount)
+            .put("poseReference", "FIRST_KEYFRAME_ANCHOR_CHAIN")
             .put(
                 "keyframePolicy",
                 JSONObject()
@@ -269,5 +321,6 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
         private const val MIN_INTERVAL_MS = 500.0
         private const val MIN_TRANSLATION_METERS = 0.20
         private const val MIN_ROTATION_DEGREES = 12.0
+        private const val SINGLE_REFERENCE_RECOVERY_NS = 2_000_000_000L
     }
 }
