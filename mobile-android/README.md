@@ -68,12 +68,13 @@ is committed to the repository. Device installation remains a manual gate.
 ### Depth capture and reconstruction (schema 3)
 
 The depth scan build enables autofocus and checks Depth support at runtime. On
-supported sessions every saved RGB frame is accompanied by a fresh raw depth
-image (unsigned millimeters, little endian) and confidence bytes. The manifest
-records all timestamps and the per-frame affine mapping from CPU image pixels
-to depth UVs; it does not assume that RGB and depth have equal aspect ratios.
-Reprojected old depth frames are skipped. Missing depth produces an explicit
-waiting state. Unsupported devices retain RGB capture and declare that source.
+supported sessions, a fresh raw depth image (unsigned millimeters, little
+endian) and confidence bytes are attached when ARCore provides them. The
+manifest records all timestamps and the per-frame affine mapping from CPU image
+pixels to depth UVs; it does not assume that RGB and depth have equal aspect
+ratios. Reprojected old depth frames are skipped. Missing fresh depth is reported
+but never blocks the RGB keyframe. Unsupported devices retain RGB capture and
+declare that source.
 
 The capture keeps only its latest local ARCore anchor. Before accepting the next
 view, it composes the relative transform while the previous and new anchors are
@@ -108,3 +109,11 @@ confidence filtering, depth discontinuities, pairwise pose composition and map
 schema completeness. Real-device depth availability, performance, precision and
 recovery still need validation; a complete overlay and adaptive direction
 planner are not part of this build.
+
+CI also generates 20 deterministic but distinct views of known 3D geometry,
+with matching unsigned-depth/confidence planes and camera poses. Five views are
+held out. A host contract check and an Android-emulator instrumentation test run
+the depth-landmark and production PnP path against them. The generated ZIP,
+per-view results and Android test report are uploaded as evidence. Passing this
+synthetic contract proves the geometry and validation path on controlled input;
+it does not prove that a physical phone is producing usable depth observations.

@@ -106,13 +106,8 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
 
         try {
             frame.acquireCameraImage().use { image ->
-                val depth = if (depthEnabled) RawDepthCapture.capture(frame, image.width, image.height) else null
-                if (depthEnabled && depth == null) {
-                    captureState = "ESPERANDO_PROFUNDIDAD"
-                    guidance = "Posición nueva detectada. Mantén el móvil estable un instante para recibir profundidad."
-                    depthStatus = "Movimiento suficiente; esperando la siguiente medición nueva de profundidad."
-                    return
-                }
+                val depthAttempt = if (depthEnabled) RawDepthCapture.capture(frame, image.width, image.height) else null
+                val depth = depthAttempt?.sample
                 val id = "%05d".format(keyframeCount)
                 val imageName = "$id.jpg"
                 val newAnchor = session.createAnchor(pose)
@@ -158,10 +153,12 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
                     depthFrameCount++
                     depthStatus = if (depth.confidentPixels == 0)
                         "Foto guardada sin distancias de confianza alta. Acércate a una zona con más detalles."
-                    else "Distancias guardadas en $depthFrameCount fotos. Comprobación del mapa pendiente."
+                    else "Profundidad FRESH guardada en $depthFrameCount fotos (${checkNotNull(depthAttempt).detail})."
+                } else if (depthEnabled) {
+                    depthStatus = "Foto $keyframeCount guardada sin profundidad: ${depthAttempt?.status} (${depthAttempt?.detail})."
                 }
                 lastCaptureTimestampNs = frame.timestamp
-                captureState = "FOTO_GUARDADA"
+                captureState = if (depthEnabled && depth == null) "FOTO_GUARDADA_SIN_PROFUNDIDAD" else "FOTO_GUARDADA"
                 guidance = "${keyframeCount}/80 fotos. Mantén zonas ya vistas en pantalla y cambia de posición; no solo gires el móvil."
                 writeManifest(null)
             }
@@ -248,7 +245,7 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
     private fun writeManifest(completedAt: String?) {
         val manifest = JSONObject()
             .put("schemaVersion", 3)
-            .put("landmarkSource", if (depthEnabled) "RAW_DEPTH" else "TRIANGULATED_RGB")
+            .put("landmarkSource", if (depthFrameCount > 0) "RAW_DEPTH" else "TRIANGULATED_RGB")
             .put("depthFrameCount", depthFrameCount)
             .put("sessionId", sessionId)
             .put("startedAt", startedAt)
