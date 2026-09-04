@@ -1,6 +1,7 @@
 package io.arhome.localizer.validation
 
-import android.test.InstrumentationTestCase
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import io.arhome.localizer.localization.CapturedLocalizationFrame
 import io.arhome.localizer.localization.PnpLandmarkLocalizationProvider
 import io.arhome.localizer.map.PersistentMapLoader
@@ -9,10 +10,17 @@ import java.util.zip.ZipInputStream
 import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.sqrt
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
 
-@Suppress("DEPRECATION")
-class SyntheticDepthValidationInstrumentedTest : InstrumentationTestCase() {
+@RunWith(AndroidJUnit4::class)
+class SyntheticDepthValidationInstrumentedTest {
+    @Test
     fun testGeneratedMapPassesProductionDepthAndPnpPipeline() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
         val root = File(instrumentation.targetContext.cacheDir, "synthetic-depth-${System.nanoTime()}")
         try {
             unzipAsset("synthetic-depth-map.zip", root)
@@ -48,6 +56,7 @@ class SyntheticDepthValidationInstrumentedTest : InstrumentationTestCase() {
     }
 
     private fun unzipAsset(name: String, root: File) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
         check(root.mkdirs())
         val canonicalRoot = root.canonicalFile.toPath()
         ZipInputStream(instrumentation.context.assets.open(name)).use { zip ->

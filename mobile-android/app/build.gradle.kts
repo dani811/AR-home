@@ -14,7 +14,7 @@ android {
         targetSdk = 36
         versionCode = 5
         versionName = "0.2.3"
-        testInstrumentationRunner = "android.test.InstrumentationTestRunner"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["appLabel"] = "AR Home Localizer"
     }
 
@@ -39,4 +39,6 @@ dependencies {
     implementation("com.google.ar:core:1.54.0")
     implementation("org.opencv:opencv:4.14.0")
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }

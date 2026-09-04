@@ -35,7 +35,7 @@ jobs:
             --keep-map mobile-android/app/src/androidTest/assets/synthetic-depth-map.zip
       - name: Test, build and lint Android localizer
         working-directory: mobile-android
-        run: gradle :app:testDebugUnitTest :app:assembleDebug :app:lintDebug -PisolatedInstall=true --stacktrace
+        run: gradle :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug -PisolatedInstall=true --stacktrace
       - name: Enable KVM for Android emulator
         if: github.event_name == 'push'
         run: |
