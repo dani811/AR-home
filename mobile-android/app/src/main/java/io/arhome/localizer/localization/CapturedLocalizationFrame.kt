@@ -30,6 +30,21 @@ class CapturedLocalizationFrame private constructor(
     }
 
     companion object {
+        /** Recorded images retain sensor orientation and their original calibration. */
+        fun fromKeyframe(keyframe: io.arhome.localizer.map.PersistentKeyframe, attempt: Int): CapturedLocalizationFrame {
+            val image = org.opencv.imgcodecs.Imgcodecs.imread(keyframe.image.absolutePath, org.opencv.imgcodecs.Imgcodecs.IMREAD_GRAYSCALE)
+            try {
+                require(!image.empty()) { "Unreadable image: ${keyframe.id}" }
+                val bytes = ByteArray(image.rows() * image.cols())
+                image.get(0, 0, bytes)
+                return CapturedLocalizationFrame(bytes, image.cols(), image.rows(),
+                    (attempt + 1L) * 1_000_000_000L, keyframe.timestampNs, keyframe.pose,
+                    keyframe.focalLengthPixels, keyframe.principalPointPixels)
+            } finally {
+                image.release()
+            }
+        }
+
         fun capture(frame: Frame): CapturedLocalizationFrame? {
             val image = try {
                 frame.acquireCameraImage()

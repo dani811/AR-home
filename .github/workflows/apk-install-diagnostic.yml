@@ -1,0 +1,57 @@
+name: Diagnose existing APK installation
+on:
+  push:
+    paths:
+      - '.github/workflows/apk-install-diagnostic.yml'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inspect-and-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ar-home-localizer-debug
+          run-id: 33787174666
+          github-token: ${{ github.token }}
+          path: original-apk
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Verify original APK signature, manifest and alignment
+        run: |
+          set -euo pipefail
+          sdkmanager 'build-tools;36.0.0'
+          mkdir -p diagnostics
+          sha256sum original-apk/app-debug.apk | tee diagnostics/sha256.txt
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs original-apk/app-debug.apk | tee diagnostics/signature.txt
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging original-apk/app-debug.apk | tee diagnostics/manifest.txt
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 original-apk/app-debug.apk > diagnostics/alignment.txt
+          unzip -t original-apk/app-debug.apk > diagnostics/zip-integrity.txt
+      - name: Enable emulator acceleration
+        run: sudo chmod a+rw /dev/kvm
+      - name: Install and launch original APK on Android 16
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: |
+            adb install original-apk/app-debug.apk | tee diagnostics/install.txt
+            adb shell am start -W -n io.arhome.capabilities/io.arhome.localizer.capture.MapCaptureActivity | tee diagnostics/launch.txt
+            adb shell pidof io.arhome.capabilities | tee diagnostics/pid.txt
+            adb shell dumpsys package io.arhome.capabilities > diagnostics/package.txt
+            adb logcat -d > diagnostics/logcat.txt
+            adb exec-out screencap -p > diagnostics/screen.png
+      - name: Preserve diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-install-diagnostics
+          path: diagnostics/
+          retention-days: 3

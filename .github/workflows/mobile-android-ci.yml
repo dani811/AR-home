@@ -25,13 +25,60 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
+      - name: Generate and validate known-geometry RGB/depth map
+        if: github.event_name == 'push'
+        run: |
+          python3 -m pip install --disable-pip-version-check numpy==2.2.6 opencv-python-headless==4.12.0.88
+          mkdir -p mobile-android/app/src/androidTest/assets mobile-android/build/synthetic-evidence
+          python3 mobile-android/tools/synthetic_depth_validation.py \
+            --output mobile-android/build/synthetic-evidence/report.json \
+            --keep-map mobile-android/app/src/androidTest/assets/synthetic-depth-map.zip
       - name: Test, build and lint Android localizer
         working-directory: mobile-android
-        run: gradle :app:testDebugUnitTest :app:assembleDebug :app:lintDebug --stacktrace
+        run: gradle :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug -PisolatedInstall=true --stacktrace
+      - name: Enable KVM for Android emulator
+        if: github.event_name == 'push'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: Exercise production depth and PnP pipeline on Android
+        if: github.event_name == 'push'
+        timeout-minutes: 15
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: cd mobile-android && gradle :app:connectedDebugAndroidTest -PisolatedInstall=true --stacktrace
+      - name: Verify isolated APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=mobile-android/app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk" > /tmp/apk-badging.txt
+          grep -F "package: name='io.arhome.capabilities.validation'" /tmp/apk-badging.txt
+          grep -F "application-label:'AR Home Localizer'" /tmp/apk-badging.txt
+          sha256sum "$apk"
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: ar-home-localizer-debug
+          name: ar-home-debug
           path: mobile-android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 3
+      - name: Upload synthetic validation evidence
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-depth-evidence
+          path: |
+            mobile-android/build/synthetic-evidence/report.json
+            mobile-android/app/src/androidTest/assets/synthetic-depth-map.zip
+            mobile-android/app/build/reports/androidTests/connected/
           if-no-files-found: error
           retention-days: 3
