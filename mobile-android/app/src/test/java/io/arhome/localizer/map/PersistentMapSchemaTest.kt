@@ -6,7 +6,7 @@ class PersistentMapSchemaTest {
     @Test
     fun `accepts complete pairwise pose chain`() {
         PersistentMapSchema.validatePoseMetadata(
-            schemaVersion = 3,
+            schemaVersion = 4,
             coordinateFrame = "ARCORE_PAIRWISE_ANCHOR_CHAIN",
             frameCount = 24,
             poseCount = 24,
@@ -17,11 +17,22 @@ class PersistentMapSchemaTest {
     @Test(expected = IllegalArgumentException::class)
     fun `rejects truncated pairwise pose chain`() {
         PersistentMapSchema.validatePoseMetadata(
-            schemaVersion = 3,
+            schemaVersion = 4,
             coordinateFrame = "ARCORE_PAIRWISE_ANCHOR_CHAIN",
             frameCount = 24,
             poseCount = 23,
             poseTimestampNs = 123L,
+        )
+    }
+
+    @Test
+    fun `keeps schema three pairwise maps readable`() {
+        PersistentMapSchema.validatePoseMetadata(
+            schemaVersion = 3,
+            coordinateFrame = "ARCORE_PAIRWISE_ANCHOR_CHAIN",
+            frameCount = 12,
+            poseCount = 12,
+            poseTimestampNs = 789L,
         )
     }
 

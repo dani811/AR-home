@@ -73,6 +73,11 @@ def write_map(root: Path, frame_count: int = 20) -> Path:
         (root / "depth" / f"{frame_id}.u16le").write_bytes(depth.astype("<u2").tobytes())
         (root / "depth" / f"{frame_id}.confidence.u8").write_bytes(confidence.tobytes())
         timestamp = (index + 1) * 1_000_000_000
+        # ARCore's raw-depth timestamp identifies the underlying estimate and
+        # need not equal the frame to which the returned image is aligned.
+        depth_timestamp = timestamp - 10_000_000
+        confident_pixels = int(np.count_nonzero(confidence >= MIN_CONFIDENCE))
+        valid_pixels = int(np.count_nonzero((depth >= 200) & (depth <= 8000)))
         keyframes.append({
             "id": frame_id,
             "image": f"images/{frame_id}.jpg",
@@ -91,17 +96,23 @@ def write_map(root: Path, frame_count: int = 20) -> Path:
                 "confidence": f"depth/{frame_id}.confidence.u8",
                 "width": WIDTH,
                 "height": HEIGHT,
-                "timestampNs": timestamp,
-                "confidenceTimestampNs": timestamp,
+                "timestampNs": depth_timestamp,
+                "alignedFrameTimestampNs": timestamp,
+                "confidenceTimestampNs": depth_timestamp,
                 "imageToDepthUv": [1.0 / WIDTH, 0.0, 0.0, 0.0, 1.0 / HEIGHT, 0.0],
                 "minimumConfidence": MIN_CONFIDENCE,
-                "confidentPixels": int(np.count_nonzero(confidence >= MIN_CONFIDENCE)),
+                "validPixels": valid_pixels,
+                "validCoverageFraction": valid_pixels / (WIDTH * HEIGHT),
+                "confidentPixels": confident_pixels,
+                "confidentCoverageFraction": confident_pixels / (WIDTH * HEIGHT),
+                "usableForMapping": confident_pixels >= 100,
             },
         })
     manifest = {
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "landmarkSource": "RAW_DEPTH",
         "depthFrameCount": frame_count,
+        "usableDepthFrameCount": frame_count,
         "sessionId": "synthetic-depth-contract-v1",
         "startedAt": "synthetic",
         "completedAt": "synthetic",

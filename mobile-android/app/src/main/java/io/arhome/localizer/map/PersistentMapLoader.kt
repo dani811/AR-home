@@ -20,12 +20,12 @@ class PersistentMapLoader {
             frameCount = keyframesJson.length(),
             poseCount = when (schemaVersion) {
                 2 -> manifest.optInt("poseSnapshotCount", -1)
-                3 -> manifest.optInt("poseChainCount", -1)
+                3, 4 -> manifest.optInt("poseChainCount", -1)
                 else -> null
             },
             poseTimestampNs = when (schemaVersion) {
                 2 -> manifest.optLong("poseSnapshotTimestampNs", -1)
-                3 -> manifest.optLong("poseChainTimestampNs", -1)
+                3, 4 -> manifest.optLong("poseChainTimestampNs", -1)
                 else -> null
             },
         )
@@ -57,11 +57,24 @@ class PersistentMapLoader {
                             require(width in 1..2048 && height in 1..2048) { "Invalid depth dimensions" }
                             val affine = depth.floatArray("imageToDepthUv")
                             require(affine.size == 6 && affine.all { it.isFinite() }) { "Invalid depth alignment" }
-                            val time = depth.getLong("timestampNs")
-                            require(time == json.getLong("frameTimestampNs")) { "Stale depth image" }
+                            val sourceTime = depth.getLong("timestampNs")
+                            val frameTime = json.getLong("frameTimestampNs")
+                            val alignedFrameTime = if (schemaVersion >= 4) {
+                                depth.getLong("alignedFrameTimestampNs")
+                            } else {
+                                sourceTime
+                            }
+                            require(sourceTime > 0 && alignedFrameTime == frameTime) {
+                                "Depth image is not aligned to its keyframe"
+                            }
+                            val confidentPixels = depth.optInt("confidentPixels", 0)
+                            require(confidentPixels in 0..Math.multiplyExact(width, height)) {
+                                "Invalid confident depth pixel count"
+                            }
                             PersistentDepth(depthFile(root, depth.getString("image"), width.toLong() * height * 2),
                                 depthFile(root, depth.getString("confidence"), width.toLong() * height),
-                                width, height, time, affine)
+                                width, height, sourceTime, alignedFrameTime, affine, confidentPixels,
+                                depth.optBoolean("usableForMapping", confidentPixels > 0))
                         },
                     ),
                 )
@@ -86,7 +99,7 @@ class PersistentMapLoader {
 }
 
 object PersistentMapSchema {
-    const val CURRENT_VERSION = 3
+    const val CURRENT_VERSION = 4
 
     fun validatePoseMetadata(
         schemaVersion: Int,
@@ -101,7 +114,7 @@ object PersistentMapSchema {
                 "Incomplete common-frame pose snapshot"
             }
         }
-        if (schemaVersion == 3) {
+        if (schemaVersion in 3..4) {
             require(coordinateFrame == "ARCORE_PAIRWISE_ANCHOR_CHAIN" && poseCount == frameCount && poseTimestampNs != null && poseTimestampNs > 0) {
                 "Incomplete pairwise anchor pose chain"
             }

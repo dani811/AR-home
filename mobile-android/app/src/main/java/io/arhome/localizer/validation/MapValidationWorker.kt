@@ -50,10 +50,15 @@ class MapValidationWorker(context: Context, params: WorkerParameters) : Worker(c
             val map = PersistentMapLoader().load(File(directory, "map"))
             val manifest = JSONObject(File(map.root, "manifest.json").readText())
             val depthFrames = map.keyframes.count { it.depth != null }
+            val usableDepthFrames = map.keyframes.count { it.depth?.usableForMapping == true }
+            val confidentDepthPixels = map.keyframes.sumOf { it.depth?.confidentPixels?.toLong() ?: 0L }
             report.put("mapSessionId", map.sessionId).put("frameCount", map.keyframes.size)
             report.put("landmarkSource", map.landmarkSource)
                 .put("coordinateFrame", map.coordinateFrame)
                 .put("depthFrameCount", depthFrames)
+                .put("usableDepthFrameCount", usableDepthFrames)
+                .put("totalConfidentDepthPixels", confidentDepthPixels)
+                .put("maxConfidentDepthPixels", map.keyframes.maxOf { it.depth?.confidentPixels ?: 0 })
                 .put("depthCoverageFraction", depthFrames.toDouble() / map.keyframes.size)
                 .put("depthMode", manifest.optString("depthMode", "NO_REGISTRADO"))
                 .put("depthAttemptCount", manifest.optInt("depthAttemptCount", 0))

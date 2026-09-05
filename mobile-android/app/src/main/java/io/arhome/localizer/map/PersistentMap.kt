@@ -20,8 +20,13 @@ data class PersistentDepth(
     val confidence: File,
     val width: Int,
     val height: Int,
+    /** Timestamp of the underlying ARCore raw-depth estimate. */
     val timestampNs: Long,
+    /** Camera frame to which ARCore aligned the returned depth image. */
+    val alignedFrameTimestampNs: Long,
     val imageToDepthUv: FloatArray,
+    val confidentPixels: Int,
+    val usableForMapping: Boolean,
 )
 
 data class PersistentMap(

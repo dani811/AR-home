@@ -65,18 +65,24 @@ conflicts, not a repair of signing continuity. CI still needs a securely persist
 signing key before these builds can reliably update one another. No private key
 is committed to the repository. Device installation remains a manual gate.
 
-### Depth capture and reconstruction (schema 3)
+### Depth capture and reconstruction (schema 4)
 
 The depth scan build enables autofocus and checks Depth support at runtime. On
 supported sessions, a fresh raw depth image (unsigned millimeters, little
 endian) and confidence bytes are attached when ARCore provides them. The
 manifest records all timestamps and the per-frame affine mapping from CPU image
 pixels to depth UVs; it does not assume that RGB and depth have equal aspect
-ratios. Reprojected old depth frames are skipped. Once a new capture position is
-ready, the app waits at most 750 ms for a fresh depth measurement, then saves the
-RGB keyframe even if none arrived. The screen and manifest report the configured
-mode, attempt count, outcome counts and timestamps. Unsupported devices retain
-RGB capture and declare that source.
+ratios. A raw estimate is new when its timestamp differs from the previously
+observed raw-depth timestamp, as required by the ARCore `Frame` contract; it is
+not required to equal the RGB frame timestamp. Schema 4 records both the raw
+estimate timestamp and the frame to which ARCore aligned the returned image.
+Repeated timestamps are reprojected old estimates and are skipped. Once a
+translated capture position is ready, the app waits at most 750 ms for a new
+depth measurement, then saves the RGB keyframe even if none arrived. A pure
+rotation is retained for RGB coverage but is never described as depth-producing
+motion. The screen and manifest report the configured mode, attempt outcomes,
+raw/usable frame counts, confident pixels, coverage and timestamps. Unsupported
+devices retain RGB capture and declare that source.
 
 The capture keeps only its latest local ARCore anchor. Before accepting the next
 view, it composes the relative transform while the previous and new anchors are
@@ -91,9 +97,10 @@ cross-session persistence. No cloud anchors, service calls or QR markers are
 involved. Schema-2 anchor-snapshot and schema-1 legacy maps remain readable.
 
 Raw-depth maps build ORB landmarks by backprojecting reliable measurements. A
-single lucky depth frame cannot force the complete map onto that path: raw depth
-is selected only with at least six depth frames covering at least half of all
-views; otherwise the complete RGB sequence uses triangulation.
+single lucky or empty depth frame cannot force the complete map onto that path:
+raw depth is selected only with at least six usable depth frames (currently at
+least 100 reliable pixels each) covering at least half of all views; otherwise
+the complete RGB sequence uses triangulation.
 The initial, provisional policy requires confidence >=192/255, optical depth
 0.2–8 m and five consistent samples in a 3x3 neighborhood. Mixed-depth edges
 are rejected at max(50 mm, 5% of depth). One depth pixel contributes at most
@@ -105,7 +112,8 @@ map produces insufficient reliable points.
 
 The held-out validation reconstructs from training frames only and reports
 landmarkSource, depthFrameCount and poseReferenceIsGroundTruth=false. Legacy
-schema-1 ZIPs still load and retain their RGB pipeline; this change cannot add
+schema-1 ZIPs still load and retain their RGB pipeline; schema-3 depth maps keep
+their original same-frame timestamp contract. This change cannot add
 missing depth measurements to existing captures.
 
 Validation: unit coverage for padded image-plane decoding, unsigned 16-bit
