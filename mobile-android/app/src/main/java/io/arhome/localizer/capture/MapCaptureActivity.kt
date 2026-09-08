@@ -427,7 +427,18 @@ class MapCaptureActivity : Activity() {
         val tracking = arView?.snapshot()
         status.text = buildString {
             appendLine(finalStatus)
-            if (mapCapture != null) appendLine("Keyframes: ${mapCapture.keyframeCount}")
+            if (mapCapture != null) {
+                val captureStatus = mapCapture.status
+                appendLine("Keyframes: ${mapCapture.keyframeCount} · with depth: ${captureStatus.depthKeyframes}")
+                appendLine("Guide: ${captureStatus.guidance}")
+                appendLine(
+                    "Since last: %.1f cm · %.1f° · camera retries: %d".format(
+                        captureStatus.translationMeters * 100.0,
+                        captureStatus.rotationDegrees,
+                        captureStatus.cameraImageRetries,
+                    ),
+                )
+            }
             preparationMs?.let { appendLine("Map preparation: $it ms (background)") }
             pnpRelocalizer?.latestStatus?.let { match ->
                 appendLine("PnP: ${match.message}")
