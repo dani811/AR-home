@@ -23,6 +23,14 @@ import kotlin.math.sqrt
 
 class MapCaptureSession(context: Context) {
 
+    data class CaptureStatus(
+        val guidance: String = "initializing",
+        val translationMeters: Double = 0.0,
+        val rotationDegrees: Double = 0.0,
+        val cameraImageRetries: Int = 0,
+        val depthKeyframes: Int = 0,
+    )
+
     data class Result(
         val sessionId: String,
         val keyframeCount: Int,
@@ -34,7 +42,10 @@ class MapCaptureSession(context: Context) {
     private val startedAt = Instant.now().toString()
     private val root = File(context.getExternalFilesDir(null) ?: context.filesDir, "map-sessions/$sessionId")
     private val images = File(root, "images")
+    private val depthImages = File(root, "depth")
+    private val confidenceImages = File(root, "confidence")
     private val keyframes = JSONArray()
+    private val capturePolicy = KeyframeCapturePolicy()
     private var lastPose: Pose? = null
     private var lastCaptureTimestampNs = 0L
     private var closed = false
@@ -43,8 +54,14 @@ class MapCaptureSession(context: Context) {
     var keyframeCount: Int = 0
         private set
 
+    @Volatile
+    var status = CaptureStatus()
+        private set
+
     init {
         check(images.mkdirs() || images.isDirectory) { "Could not create map session directory: ${images.absolutePath}" }
+        check(depthImages.mkdirs() || depthImages.isDirectory) { "Could not create depth directory" }
+        check(confidenceImages.mkdirs() || confidenceImages.isDirectory) { "Could not create confidence directory" }
         writeManifest(null)
     }
 
@@ -52,20 +69,26 @@ class MapCaptureSession(context: Context) {
     fun onFrame(frame: Frame) {
         if (closed || frame.camera.trackingState != TrackingState.TRACKING) return
         val pose = frame.camera.pose
-        if (!shouldCapture(pose, frame.timestamp)) return
+        val decision = captureDecision(pose, frame.timestamp)
+        status = status.copy(
+            guidance = decision.reason,
+            translationMeters = decision.translationMeters,
+            rotationDegrees = decision.rotationDegrees,
+        )
+        if (!decision.capture) return
 
         try {
-            frame.acquireCameraImage().use { image ->
-                val id = "%05d".format(keyframeCount)
-                val imageName = "$id.jpg"
+            val id = "%05d".format(keyframeCount)
+            val imageName = "$id.jpg"
+            val imageTimestamp = frame.acquireCameraImage().use { image ->
                 File(images, imageName).writeBytes(image.toJpeg(90))
-
-                val intrinsics = frame.camera.imageIntrinsics
-                keyframes.put(
-                    JSONObject()
+                image.timestamp
+            }
+            val intrinsics = frame.camera.imageIntrinsics
+            val keyframe = JSONObject()
                         .put("id", id)
                         .put("image", "images/$imageName")
-                        .put("timestampNs", image.timestamp)
+                        .put("timestampNs", imageTimestamp)
                         .put("poseTranslationMeters", JSONArray(pose.translation.toList()))
                         .put("poseRotationQuaternion", JSONArray(pose.rotationQuaternion.toList()))
                         .put(
@@ -75,14 +98,22 @@ class MapCaptureSession(context: Context) {
                                 .put("principalPointPixels", JSONArray(intrinsics.principalPoint.toList()))
                                 .put("imageDimensionsPixels", JSONArray(intrinsics.imageDimensions.toList())),
                         )
-                )
-                keyframeCount++
-                lastPose = pose
-                lastCaptureTimestampNs = frame.timestamp
-                writeManifest(null)
+            captureOptionalDepth(frame, id)?.let { (depth, confidence) ->
+                keyframe.put("rawDepth", depth)
+                keyframe.put("rawDepthConfidence", confidence)
+                status = status.copy(depthKeyframes = status.depthKeyframes + 1)
             }
+            keyframes.put(keyframe)
+            keyframeCount++
+            lastPose = pose
+            lastCaptureTimestampNs = frame.timestamp
+            status = status.copy(guidance = "captured $id — keep orbiting")
+            writeManifest(null)
         } catch (_: NotYetAvailableException) {
-            // A later tracked frame will be eligible again.
+            status = status.copy(
+                guidance = "camera frame busy — keep moving slowly",
+                cameraImageRetries = status.cameraImageRetries + 1,
+            )
         }
     }
 
@@ -103,12 +134,20 @@ class MapCaptureSession(context: Context) {
         return Result(sessionId, keyframeCount, root, archive)
     }
 
-    private fun shouldCapture(pose: Pose, timestampNs: Long): Boolean {
-        val previous = lastPose ?: return true
+    private data class PoseDecision(
+        val capture: Boolean,
+        val reason: String,
+        val translationMeters: Double,
+        val rotationDegrees: Double,
+    )
+
+    private fun captureDecision(pose: Pose, timestampNs: Long): PoseDecision {
+        val previous = lastPose ?: return PoseDecision(true, "first viewpoint", 0.0, 0.0)
         val elapsedMs = (timestampNs - lastCaptureTimestampNs) / 1_000_000.0
-        if (elapsedMs < MIN_INTERVAL_MS) return false
-        return translationDistance(previous, pose) >= MIN_TRANSLATION_METERS ||
-            rotationDegrees(previous, pose) >= MIN_ROTATION_DEGREES
+        val translation = translationDistance(previous, pose)
+        val rotation = rotationDegrees(previous, pose)
+        val decision = capturePolicy.evaluate(elapsedMs, translation, rotation)
+        return PoseDecision(decision.capture, decision.reason, translation, rotation)
     }
 
     private fun writeManifest(completedAt: String?) {
@@ -121,10 +160,16 @@ class MapCaptureSession(context: Context) {
             .put(
                 "keyframePolicy",
                 JSONObject()
-                    .put("minIntervalMs", MIN_INTERVAL_MS)
-                    .put("minTranslationMeters", MIN_TRANSLATION_METERS)
-                    .put("minRotationDegrees", MIN_ROTATION_DEGREES),
+                    .put("mode", "RGB_VIO_WITH_OPTIONAL_DEPTH")
+                    .put("minIntervalMs", KeyframeCapturePolicy.MIN_INTERVAL_MS)
+                    .put("minTranslationMeters", KeyframeCapturePolicy.MIN_TRANSLATION_METERS)
+                    .put("minRotationDegrees", KeyframeCapturePolicy.MIN_ROTATION_DEGREES)
+                    .put("slowCaptureIntervalMs", KeyframeCapturePolicy.SLOW_CAPTURE_INTERVAL_MS)
+                    .put("slowTranslationMeters", KeyframeCapturePolicy.SLOW_TRANSLATION_METERS)
+                    .put("slowRotationDegrees", KeyframeCapturePolicy.SLOW_ROTATION_DEGREES),
             )
+            .put("depthKeyframeCount", status.depthKeyframes)
+            .put("cameraImageRetries", status.cameraImageRetries)
             .put("keyframes", keyframes)
         File(root, "manifest.json").writeText(manifest.toString(2))
     }
@@ -145,6 +190,50 @@ class MapCaptureSession(context: Context) {
             aq[0] * bq[0] + aq[1] * bq[1] + aq[2] * bq[2] + aq[3] * bq[3],
         ).coerceIn(0f, 1f)
         return Math.toDegrees(2.0 * acos(dot.toDouble()))
+    }
+
+    private fun captureOptionalDepth(frame: Frame, id: String): Pair<JSONObject, JSONObject>? = try {
+        val depth = frame.acquireRawDepthImage16Bits().use { image ->
+            val name = "$id.depth16"
+            File(depthImages, name).writeBytes(image.packedPlaneBytes(2))
+            JSONObject()
+                .put("file", "depth/$name")
+                .put("width", image.width)
+                .put("height", image.height)
+                .put("timestampNs", image.timestamp)
+                .put("format", "DEPTH16_LE")
+        }
+        val confidence = frame.acquireRawDepthConfidenceImage().use { image ->
+            val name = "$id.confidence8"
+            File(confidenceImages, name).writeBytes(image.packedPlaneBytes(1))
+            JSONObject()
+                .put("file", "confidence/$name")
+                .put("width", image.width)
+                .put("height", image.height)
+                .put("timestampNs", image.timestamp)
+                .put("format", "UINT8")
+        }
+        depth to confidence
+    } catch (_: NotYetAvailableException) {
+        null
+    } catch (_: IllegalStateException) {
+        // Depth is an enhancement; RGB + VIO remains a complete capture path.
+        null
+    }
+
+    private fun Image.packedPlaneBytes(bytesPerPixel: Int): ByteArray {
+        val plane = planes[0]
+        val buffer = plane.buffer.duplicate().apply { rewind() }
+        val output = ByteArray(width * height * bytesPerPixel)
+        var target = 0
+        for (row in 0 until height) {
+            val rowStart = row * plane.rowStride
+            for (column in 0 until width) {
+                val pixelStart = rowStart + column * plane.pixelStride
+                repeat(bytesPerPixel) { offset -> output[target++] = buffer.get(pixelStart + offset) }
+            }
+        }
+        return output
     }
 
     private fun Image.toJpeg(quality: Int): ByteArray {
@@ -178,9 +267,4 @@ class MapCaptureSession(context: Context) {
         }
     }
 
-    companion object {
-        private const val MIN_INTERVAL_MS = 500.0
-        private const val MIN_TRANSLATION_METERS = 0.20
-        private const val MIN_ROTATION_DEGREES = 12.0
-    }
 }
