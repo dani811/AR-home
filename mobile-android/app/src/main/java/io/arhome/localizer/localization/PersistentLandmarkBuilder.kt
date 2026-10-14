@@ -46,16 +46,22 @@ class PersistentLandmarkBuilder {
     private val orb: ORB = createOrb()
     private val matcher = DescriptorMatcher.create(DescriptorMatcher.BRUTEFORCE_HAMMING)
 
-    fun build(map: PersistentMap): PersistentLandmarkMap {
-        val features = map.keyframes.mapNotNull(::extractFeatures)
+    fun build(map: PersistentMap, checkpoint: () -> Unit = {}): PersistentLandmarkMap {
+        if (map.landmarkSource == "RAW_DEPTH") {
+            try { return DepthLandmarkBuilder().build(map, checkpoint) }
+            finally { orb.clear(); matcher.clear() }
+        }
+        val features = ArrayList<Features>()
         val landmarks = ArrayList<PersistentVisualLandmark>()
         var evaluatedPairs = 0
         var triangulatedPairs = 0
         var rejectedGeometry = 0
 
         try {
+            map.keyframes.forEach { checkpoint(); extractFeatures(it)?.let(features::add) }
             for (i in features.indices) {
                 for (j in i + 1..minOf(i + PAIR_WINDOW, features.lastIndex)) {
+                    checkpoint()
                     val first = features[i]
                     val second = features[j]
                     evaluatedPairs++
@@ -76,6 +82,8 @@ class PersistentLandmarkBuilder {
             }
         } finally {
             features.forEach { it.descriptors.release() }
+            orb.clear()
+            matcher.clear()
         }
 
         return PersistentLandmarkMap(

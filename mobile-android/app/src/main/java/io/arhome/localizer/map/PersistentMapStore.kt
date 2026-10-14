@@ -6,7 +6,9 @@ import java.util.zip.ZipInputStream
 
 class PersistentMapStore(private val baseDirectory: File) {
 
-    private val currentRoot = File(baseDirectory, "current")
+    private val activePointer = File(baseDirectory, "active-map.txt")
+    private val currentRoot: File
+        get() = if (activePointer.isFile) File(baseDirectory, activePointer.readText()) else File(baseDirectory, "current")
     private val loader = PersistentMapLoader()
 
     fun currentOrNull(): PersistentMap? =
@@ -21,9 +23,12 @@ class PersistentMapStore(private val baseDirectory: File) {
         try {
             unzip(input, staging)
             loader.load(staging)
-            currentRoot.deleteRecursively()
-            check(staging.renameTo(currentRoot)) { "Could not activate imported map" }
-            return loader.load(currentRoot)
+            val immutableRoot = File(baseDirectory, "map-${java.util.UUID.randomUUID()}")
+            check(staging.renameTo(immutableRoot)) { "Could not store imported map" }
+            val pendingPointer = File(baseDirectory, "active-map.tmp")
+            pendingPointer.writeText(immutableRoot.name)
+            check(pendingPointer.renameTo(activePointer)) { "Could not activate imported map" }
+            return loader.load(immutableRoot)
         } catch (e: Exception) {
             staging.deleteRecursively()
             throw e

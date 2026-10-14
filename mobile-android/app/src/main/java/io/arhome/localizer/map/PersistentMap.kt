@@ -12,6 +12,21 @@ data class PersistentKeyframe(
     val focalLengthPixels: FloatArray,
     val principalPointPixels: FloatArray,
     val imageDimensionsPixels: IntArray,
+    val depth: PersistentDepth? = null,
+)
+
+data class PersistentDepth(
+    val image: File,
+    val confidence: File,
+    val width: Int,
+    val height: Int,
+    /** Timestamp of the underlying ARCore raw-depth estimate. */
+    val timestampNs: Long,
+    /** Camera frame to which ARCore aligned the returned depth image. */
+    val alignedFrameTimestampNs: Long,
+    val imageToDepthUv: FloatArray,
+    val confidentPixels: Int,
+    val usableForMapping: Boolean,
 )
 
 data class PersistentMap(
@@ -20,12 +35,18 @@ data class PersistentMap(
     val coordinateFrame: String,
     val root: File,
     val keyframes: List<PersistentKeyframe>,
+    val landmarkSource: String = "TRIANGULATED_RGB",
 ) {
     init {
-        require(coordinateFrame == "ARCORE_SESSION_LOCAL") {
+        require(coordinateFrame in setOf(
+            "ARCORE_SESSION_LOCAL",
+            "ARCORE_ANCHOR_SNAPSHOT",
+            "ARCORE_PAIRWISE_ANCHOR_CHAIN",
+        )) {
             "Unsupported coordinate frame: $coordinateFrame"
         }
         require(keyframes.isNotEmpty()) { "Persistent map contains no keyframes" }
+        require(landmarkSource in setOf("TRIANGULATED_RGB", "RAW_DEPTH")) { "Unsupported landmark source: $landmarkSource" }
     }
 }
 
