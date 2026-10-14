@@ -249,7 +249,7 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
         }
         val distance = translationDistance(previous, pose)
         val angle = rotationDegrees(previous, pose)
-        val kind = CaptureMotionPolicy.classify(distance, angle)
+        val kind = CaptureMotionPolicy.classify(distance, angle, elapsedMs)
         if (kind == CaptureMotionKind.WAIT) {
             depthWaitStartedNs = 0L
             captureState = "ESPERANDO_MOVIMIENTO"
@@ -381,7 +381,7 @@ class MapCaptureSession(context: Context, private val session: Session) : AutoCl
     }
 
     companion object {
-        private const val MIN_INTERVAL_MS = 500.0
+        private const val MIN_INTERVAL_MS = CaptureMotionPolicy.MIN_INTERVAL_MS
         private const val MAX_FRESH_DEPTH_WAIT_NS = 750_000_000L
         private const val SINGLE_REFERENCE_RECOVERY_NS = 2_000_000_000L
     }
